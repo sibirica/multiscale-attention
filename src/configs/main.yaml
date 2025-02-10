@@ -39,7 +39,7 @@ batch_size_eval: null # Batch size for evaluation (if null, set to 1.5*batch_siz
 max_epoch: 40
 n_steps_per_epoch: 4000
 
-save_periodic: 15 # Save the model periodically (0 to disable)
+save_periodic: 0 # Save the model periodically (0 to disable)
 log_periodic: 100 # Log stats periodically (0 to disable)
 print_freq: 1000 # Print every n steps
 
@@ -99,13 +99,13 @@ symbol:
   max_output_dimension: 5
 
 ### experiment & logging names
-exp_name: bcat
+exp_name: ts
 exp_id: null
 
 use_wandb: 1
 wandb:
   project: null
-  entity: null
+  entity: schaefferlab1
   notes: null
   name: null
   id: null
