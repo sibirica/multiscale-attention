@@ -38,7 +38,7 @@ class VQTrainer(Trainer):
         model_input["input"] = torch.cat([data_input, data_label], dim=1)  # (bs, t_num, x_num, x_num, dim)
 
         d = {
-            "data_label": model_input["input"].clone(),
+            "data_label": model_input["input"].detach().clone(),
             "data_mask": data_mask,  # NOTE: modify for mixed length training
             "mean": mean,
             "std": std,

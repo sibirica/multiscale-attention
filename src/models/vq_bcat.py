@@ -129,10 +129,10 @@ class VQBCAT(nn.Module):
 
     @torch.compiler.disable()
     def prepare_data_ids(self, data, input_len):
-        with torch.inference_mode():
+        with torch.no_grad():
             # prepare labels for loss calculation
-            quant, ids = self.embedder.data_to_ids(data)  # (bs, t-1, p, p)
-            labels = ids[:, input_len - 1 :]  # (bs, output_len, p, p)
+            quant, ids = self.embedder.data_to_ids(data)  # (bs, input_len + output_len, p, p)
+            labels = ids[:, input_len:].detach().clone()  # (bs, output_len, p, p)
         return quant, labels
 
     def fwd(self, data, times, input_len: int, **kwargs):
@@ -147,15 +147,16 @@ class VQBCAT(nn.Module):
             labels:        LongTensor (bs, output_len, patch_num, patch_num)  # Used for loss calculation
         """
 
-        data = data[:, :-1]  # ignore last timestep for autoregressive training (b, t_num-1, x_num, x_num, data_dim)
-        times = times[:, :-1]  # (bs/1, t_num-1, 1)
-
         """
         Step 1: Prepare quantized input and ids as labels
-            (b, t, x, y, c) -> (b, output_len*p*p, d)
+            (b, t, x, y, c) -> (b, (t-1)*p*p, d)
         """
-        quant, labels = self.prepare_data_ids(data, input_len)  # (bs, t-1, p, p)
+        # quant (b, input_len + output_len, p, p)
+        # labels (b, output_len, p, p)
+        quant, labels = self.prepare_data_ids(data, input_len)
 
+        quant = quant[:, :-1]  # ignore last step for autoregressive training
+        times = times[:, :-1]  # (bs/1, t_num-1, 1)
         data = self.embedder.add_embeddings(times, input_quant=quant)  # (bs, data_len, d)
 
         """
