@@ -772,7 +772,7 @@ class VQEmbedder(nn.Module):
             weights = torch.load(config.path, map_location="cpu", weights_only=False)
             self.vq.load_state_dict(weights["model"])
         else:
-            logger.warning(f"Missing VQModel pretrained weights")
+            logger.warning(f"Missing VQModel pretrained weights!!!!!")
 
         for param in self.vq.parameters():
             param.requires_grad = False

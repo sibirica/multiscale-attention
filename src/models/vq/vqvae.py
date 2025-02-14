@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 from .quantize import VectorQuantizer2 as VectorQuantizer
 from .vae import Encoder, Decoder
+from einops import rearrange
 
 
 class VQModel(nn.Module):
@@ -81,22 +82,28 @@ class VQModel(nn.Module):
         return self.decoder.conv_out.weight
 
 
-class VQModelInterface(VQModel):
-    def __init__(self, embed_dim, *args, **kwargs):
-        super().__init__(embed_dim=embed_dim, *args, **kwargs)
-        self.embed_dim = embed_dim
+class VQModelWrapper(VQModel):
+    def forward(self, mode, **kwargs):
+        """
+        Forward function with different forward modes.
+        ### Small hack to handle PyTorch distributed.
+        """
+        input = kwargs["input"]  # (b t x y c)
+        bs = input.size(0)
+        input = rearrange(input, "b t x y c -> (b t) c x y")
 
-    def encode(self, x):
-        h = self.encoder(x)
-        h = self.quant_conv(h)
-        return h
-
-    def decode(self, h, force_not_quantize=False):
-        # also go through quantization layer
-        if not force_not_quantize:
-            quant, emb_loss, info = self.quantize(h)
+        if mode == "fwd":
+            dec, diff = self.fwd(input)
+            output = rearrange(dec, "(b t) c x y -> b t x y c", b=bs)
+            return output, diff
+        elif mode == "generate":
+            dec, diff = self.fwd(input)
+            output = rearrange(dec, "(b t) c x y -> b t x y c", b=bs)
+            return output
         else:
-            quant = h
-        quant = self.post_quant_conv(quant)
-        dec = self.decoder(quant)
-        return dec
+            raise Exception(f"Unknown mode: {mode}")
+
+    def fwd(self, input):
+        quant, diff, (_, _, ind) = self.encode(input)
+        dec = self.decode(quant)
+        return dec, diff

@@ -15,6 +15,7 @@ import hydra
 
 from trainer import Trainer
 from evaluate import Evaluator, metric_to_header
+from vq_utils import VQTrainer
 
 
 torch.multiprocessing.set_sharing_strategy("file_system")
@@ -126,7 +127,10 @@ def main(params: DictConfig):
 
     symbol_env = SymbolicEnvironment(params.symbol)
     modules = build_model(params, params.model, params.data, symbol_env)
-    trainer = Trainer(modules, params, symbol_env)
+    if params.train_vq:
+        trainer = VQTrainer(modules, params, symbol_env)
+    else:
+        trainer = Trainer(modules, params, symbol_env)
     evaluator = Evaluator(trainer, symbol_env)
 
     if params.eval_only:
@@ -156,25 +160,29 @@ def main(params: DictConfig):
 
             if (params.log_periodic > 0) and (trainer.inner_epoch % params.log_periodic == 0):
                 data_loss = trainer.data_loss / params.log_periodic
-                logger.info(
-                    "Epoch {} | step {} | data loss = {:.8f}".format(trainer.epoch, trainer.inner_epoch, data_loss)
-                )
-
                 trainer.data_loss = 0.0
 
-            if params.use_wandb:
-                if trainer.grad_norm is not None and (trainer.n_iter + 1) % params.accumulate_gradients == 0:
-                    wandb.log(
-                        {
-                            "train": {
-                                "data_loss": trainer.data_loss_step,
-                                "grad_norm": trainer.grad_norm,
-                                "step": trainer.n_total_iter,
-                            }
-                        }
+                if params.train_vq:
+                    commit_loss = trainer.commit_loss / params.log_periodic
+                    trainer.commit_loss = 0.0
+                    logger.info(
+                        "Epoch {} | step {} | data loss = {:.8f} | commit loss = {:.8f}".format(
+                            trainer.epoch, trainer.inner_epoch, data_loss, commit_loss
+                        )
                     )
                 else:
-                    wandb.log({"train": {"data_loss": trainer.data_loss_step, "step": trainer.n_total_iter}})
+                    logger.info(
+                        "Epoch {} | step {} | data loss = {:.8f}".format(trainer.epoch, trainer.inner_epoch, data_loss)
+                    )
+
+            if params.use_wandb:
+                logs = {"data_loss": trainer.data_loss_step, "step": trainer.n_total_iter}
+                if params.train_vq:
+                    logs["commit_loss"] = trainer.commit_loss_step
+                if trainer.grad_norm is not None and (trainer.n_iter + 1) % params.accumulate_gradients == 0:
+                    logs["grad_norm"] = trainer.grad_norm
+
+                wandb.log({"train": logs})
 
         logger.info(f"============ End of epoch {trainer.epoch} ============")
 

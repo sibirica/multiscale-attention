@@ -51,6 +51,8 @@ accumulate_gradients: 1
 
 clip_grad_norm: 1.0 # Clip gradients norm (0 to disable)
 
+train_vq: 0
+
 ## loss
 
 loss_weight: none # Reweight data loss, select from [none(mse), l2, linfty]

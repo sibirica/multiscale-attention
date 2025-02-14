@@ -26,10 +26,11 @@ embedder:
     time_embed: learnable # select from continuous and learnable
     max_time_len: 20
 
-    codebook_size: 2048
+    codebook_size: 4096
 
     z_ch: 512
     mid_ch: 32
     ch_mult: [1, 2, 4, 8]
 
-    path: null
+    # path: null
+    path: checkpoint/ts/vqvae_1/checkpoint.pth
