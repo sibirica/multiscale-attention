@@ -317,7 +317,7 @@ class Trainer(object):
             except RuntimeError:  # remove the 'module.'
                 weights = {name.partition(".")[2]: v for name, v in data[k].items()}
                 v.load_state_dict(weights)
-            v.requires_grad = requires_grad
+            # v.requires_grad = requires_grad  # TODO: check if this works
 
         # reload optimizer
         logger.warning("Reloading checkpoint optimizer ...")
@@ -389,6 +389,18 @@ class Trainer(object):
             self.data_iter = iter(self.dataloader)
             batch = next(self.data_iter)
         return batch
+
+    def vq_loss_fn(self, data_output, labels, data_mask):
+        """
+        data_output:    Tensor:    (b, t, px, py, codebook_size)
+        labels:         LongTensor (b, t, px, py)
+
+            NOTE: ignore mask for now
+        """
+        output = data_output.flatten(end_dim=-2)
+        target = labels.flatten()
+        loss = F.cross_entropy(output, target)
+        return loss
 
     def data_loss_fn(self, data_output, data_label, data_mask):
         """
@@ -560,9 +572,8 @@ class Trainer(object):
 
         # prepare data part
 
-        model_input, d = self.prepare_data(
-            samples
-        )  # model_input contains model input args, d contains other attributes
+        model_input, d = self.prepare_data(samples)
+        # model_input contains model input args, d contains other attributes
 
         # forward / loss
 
@@ -575,14 +586,18 @@ class Trainer(object):
         """
 
         with torch.amp.autocast("cpu" if params.cpu else "cuda", enabled=bool(params.amp), dtype=torch.bfloat16):
-            data_output = model("fwd", **model_input)  # (bs, output_len, x_num, x_num, data_dim)
+            if self.params.model.name.startswith("vq"):
+                data_output, labels = model("fwd", **model_input)
+                data_loss = self.vq_loss_fn(data_output, labels, d["data_mask"])
+            else:
+                data_output = model("fwd", **model_input)  # (bs, output_len, x_num, x_num, data_dim)
 
-            if self.params.normalize and self.params.denormalize_for_loss:
-                # denormalize data, compute loss in original space
-                data_output = data_output * d["std"] + d["mean"]
+                if self.params.normalize and self.params.denormalize_for_loss:
+                    # denormalize data, compute loss in original space
+                    data_output = data_output * d["std"] + d["mean"]
 
-            data_output = data_output * d["data_mask"]
-            data_loss = self.data_loss_fn(data_output, d["data_label"], d["data_mask"])
+                data_output = data_output * d["data_mask"]
+                data_loss = self.data_loss_fn(data_output, d["data_label"], d["data_mask"])
 
         self.data_loss_step = data_loss.item()
         self.data_loss += self.data_loss_step

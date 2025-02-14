@@ -141,6 +141,10 @@ def main(params: DictConfig):
         max_mem = torch.cuda.max_memory_allocated() / 1024**2
         s_mem = "MEM: {:.2f} MB".format(max_mem)
         logger.info(s_mem)
+
+        if params.multi_gpu:
+            torch.distributed.destroy_process_group()
+
         exit()
 
     while trainer.epoch < params.max_epoch:

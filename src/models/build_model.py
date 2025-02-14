@@ -6,6 +6,7 @@ from .bcat import BCAT
 from .causal import BCAT_causal
 from .baselines import FNO, UNet, ViT, DeepONet
 from .space_time import ST_auto
+from .vq_bcat import VQBCAT
 
 logger = getLogger()
 
@@ -19,6 +20,9 @@ def build_model(params, model_config, data_config, symbol_env):
 
     if name == "st_auto":
         modules["model"] = ST_auto(model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num)
+
+    elif name == "vq_bcat_auto":
+        modules["model"] = VQBCAT(model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num)
 
     elif name == "bcat_auto":
         modules["model"] = BCAT(model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num)
