@@ -769,8 +769,17 @@ class VQEmbedder(nn.Module):
         # reload pretrained weights
         if config.path is not None:
             logger.info(f"Loading pretrained weights for VQModel from {config.path}")
-            weights = torch.load(config.path, map_location="cpu", weights_only=False)
-            self.vq.load_state_dict(weights["model"])
+            weights = torch.load(config.path, map_location="cpu", weights_only=False)["model"]
+            try:
+                self.vq.load_state_dict(weights)
+            except:
+                weights = {name.partition(".")[2]: v for name, v in weights.items()}  # remove the 'module.'
+                try:
+                    self.vq.load_state_dict(weights)
+                except:
+                    weights = {name.partition(".")[2]: v for name, v in weights.items()}  # remove the '_orig_mod.'
+                    self.vq.load_state_dict(weights)
+
         else:
             logger.warning(f"Missing VQModel pretrained weights!!!!!")
 
