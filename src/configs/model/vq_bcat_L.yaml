@@ -1,0 +1,36 @@
+name: vq_bcat_auto
+
+# shared attributes
+n_layer: 12
+dim_emb: 1024
+dim_ffn: 2752
+dropout: 0.1
+n_head: 8
+norm_first: true
+positional_embedding: null
+qk_norm: 1
+norm: rms # select from [layer, rms]
+activation: swiglu
+rotary: 0
+
+flex_attn: 0
+kv_cache: 1
+
+patch_num: 16 # for input, number of patches per dimension
+patch_num_output: ${.patch_num} # for output, number of patches per dimension
+
+embedder:
+    dim: ${..dim_emb}
+    patch_num: ${..patch_num}
+
+    time_embed: learnable # select from continuous and learnable
+    max_time_len: 20
+
+    codebook_size: 4096
+
+    z_ch: 1024
+    mid_ch: 64
+    ch_mult: [1, 2, 4, 8]
+
+    # path: null
+    path: checkpoint/ts/vqvae_2/checkpoint.pth

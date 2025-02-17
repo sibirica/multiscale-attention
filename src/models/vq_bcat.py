@@ -123,7 +123,7 @@ class VQBCAT(nn.Module):
         if mode == "fwd":
             return self.fwd(**kwargs)
         elif mode == "generate":
-            return self.generate(**kwargs)
+            return self.generate2(**kwargs)
         else:
             raise Exception(f"Unknown mode: {mode}")
 
@@ -251,3 +251,71 @@ class VQBCAT(nn.Module):
             cur_len += 1
 
         return self.embedder.ids_to_data(data_all[:, input_len:]) * data_mask
+
+    @torch.compiler.disable()
+    def generate2(self, data_input, times, input_len: int, data_mask, carry_over_c=-1, **kwargs):
+        """
+        Inputs:
+            data_input:    Tensor     (bs, input_len, x_num, x_num, data_dim)
+            times:         Tensor     (bs/1, input_len+output_len, 1)
+            data_mask:     Tensor     (1, 1, 1, 1, data_dim)
+            carry_over_c:  int        Indicate channel that should be carried over,
+                                        not masked out or from output (e.g. boundary mask channel)
+
+            NOTE: ignore carry_over_c for now
+        Output:
+            data_output:     Tensor     (bs, output_len, x_num, x_num, data_dim)
+        """
+
+        t_num = times.size(1)
+        output_len = t_num - input_len
+        bs, _, x_num, _, data_dim = data_input.size()
+
+        data_all = torch.zeros(bs, t_num, x_num, x_num, data_dim, dtype=data_input.dtype, device=data_input.device)
+
+        data_all[:, :input_len] = data_input
+        cur_len = input_len
+        prev_len = 0
+
+        config = self.config
+        if config.kv_cache:
+            cache = KVCache(
+                config.n_layer, data_input.shape[0], self.mask.size(0), config.n_head, config.dim_emb // config.n_head
+            )
+
+        for i in range(output_len):
+            cur_data_input = data_all[:, :cur_len]  # (bs, cur_len, x_num, x_num, data_dim)
+
+            # (bs, cur_len, x_num, x_num, data_dim) -> (bs, data_len=cur_len*p*p, dim)
+            quant, _ = self.embedder.data_to_ids(cur_data_input)
+            skip_len = prev_len if self.config.kv_cache else 0
+            cur_data_input = self.embedder.add_embeddings(
+                times[:, :cur_len], input_quant=quant, skip_len=skip_len
+            )  # (bs, data_len, d)
+
+            mask = None
+            if (not self.config.kv_cache) or i == 0:
+                data_len = cur_len * self.seq_len_per_step
+                mask = self.mask[:data_len, :data_len]
+
+            if self.config.kv_cache:
+                cur_data_encoded = self.transformer(cur_data_input, mask, cache=cache)
+            else:
+                cur_data_encoded = self.transformer(cur_data_input, mask)  # (bs, data_len, dim)
+
+            new_output = cur_data_encoded[:, -self.seq_len_per_step :]  # (bs, patch_num*patch_num, dim)
+            new_output = rearrange(new_output, "b (h w) d -> b h w d", h=self.embedder.patch_num)
+            new_logits = self.head(new_output)  # (b, p, p, codebook_size)
+
+            # use greedy decoding for now
+            new_output = torch.argmax(new_logits, dim=-1)  # (b, p, p)
+
+            new_output = new_output[:, None]  # (b, 1, p, p)
+            new_output = self.embedder.ids_to_data(new_output) * data_mask  # (b, t, x, y, c)
+
+            data_all[:, cur_len : (cur_len + 1)] = new_output
+
+            prev_len = cur_len
+            cur_len += 1
+
+        return data_all[:, input_len:]
