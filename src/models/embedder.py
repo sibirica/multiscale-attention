@@ -32,6 +32,8 @@ def get_embedder(config, x_num, max_output_dim):
             embedder = FourierEmbedder
         case "resnet":
             embedder = ResNetEmbedder
+        case "conv_reg":
+            embedder = ConvRegEmbedder
         case _:
             raise ValueError(f"Unknown embedder type: {config.type}")
 
@@ -963,5 +965,138 @@ class ResNetEmbedder(nn.Module):
         )
         data_output = self.post_quant_conv(data_output)
         data_output = self.decoder(data_output)
+        data_output = rearrange(data_output, "(b t) c h w -> b t h w c", b=bs)
+        return data_output
+
+
+class ConvRegEmbedder(nn.Module):
+    """
+    Preprocess data (break into patches) and embed them into target dimension.
+    """
+
+    def __init__(self, config, x_num, data_dim):
+        super().__init__()
+        self.config = config
+
+        self.dim = config.dim
+        self.data_dim = data_dim
+        act = get_activation("gelu")
+
+        assert (
+            x_num % config.patch_num == 0
+        ), f"x_num must be divisible by patch_num, x_num: {x_num}, patch_num: {config.patch_num}"
+        self.patch_resolution = x_num // config.patch_num  # resolution of one space dimension for each patch
+        self.patch_dim = data_dim * self.patch_resolution * self.patch_resolution  # dimension per patch
+
+        assert (
+            x_num % config.patch_num_output == 0
+        ), f"x_num must be divisible by patch_num_output, x_num: {x_num}, patch_num_output: {config.patch_num_output}"
+        self.patch_resolution_output = (
+            x_num // config.patch_num_output
+        )  # resolution of one space dimension for each patch in output
+        self.patch_dim_output = (
+            data_dim * self.patch_resolution_output * self.patch_resolution_output
+        )  # dimension per patch in output
+
+        ## for encoder part
+
+        self.patch_position_embeddings = get_embeddings((1, 1, config.patch_num * config.patch_num, self.dim))
+        self.num_reg_token = config.num_reg_token
+        self.register_tokens = get_embeddings((1, 1, self.num_reg_token, self.dim))
+        self.data_len_per_step = config.patch_num**2
+        self.seq_len_per_step = self.data_len_per_step + self.num_reg_token
+
+        self.time_embed_type = config.get("time_embed", "continuous")
+        match self.time_embed_type:
+            case "continuous":
+                self.time_proj = nn.Sequential(
+                    nn.Linear(1, self.dim),
+                    act(),
+                    nn.Linear(self.dim, self.dim),
+                )
+            case "learnable":
+                self.time_embed = get_embeddings((1, config.get("max_time_len", 10), 1, self.dim))
+            case _:
+                self.time_embed = None
+
+        # regular vit patch embedding
+        self.conv_proj = nn.Sequential(
+            nn.Conv2d(
+                in_channels=data_dim,
+                out_channels=self.dim,
+                kernel_size=self.patch_resolution,
+                stride=self.patch_resolution,
+            ),
+            act(),
+            nn.Conv2d(in_channels=self.dim, out_channels=self.dim, kernel_size=1, stride=1),
+        )
+
+        ## for decoder part
+
+        self.conv_dim = config.get("conv_dim", self.dim // 4)
+
+        self.post_proj = nn.Sequential(
+            nn.ConvTranspose2d(
+                in_channels=self.dim,
+                out_channels=self.conv_dim,
+                kernel_size=self.patch_resolution_output,
+                stride=self.patch_resolution_output,
+            ),
+            act(),
+            nn.Conv2d(in_channels=self.conv_dim, out_channels=self.conv_dim, kernel_size=1, stride=1),
+            act(),
+            nn.Conv2d(in_channels=self.conv_dim, out_channels=self.data_dim, kernel_size=1, stride=1),
+        )
+
+    def encode(self, data, times, skip_len=0):
+        """
+        Input:
+            data:           Tensor (bs, input_len, x_num, x_num, data_dim)
+            times:          Tensor (bs, input_len, 1)
+        Output:
+            data:           Tensor (bs, data_len, dim)      data_len = input_len * patch_num * patch_num
+                            embedded data + time embeddings + patch position embeddings
+        """
+
+        bs = data.size(0)
+        data = rearrange(data[:, skip_len:], "b t h w c -> (b t) c h w")
+        data = self.conv_proj(data)  # (bs*input_len, d, patch_num, patch_num)
+        data = rearrange(data, "(b t) d h w -> b t (h w) d", b=bs)  # (bs, input_len, p*p, dim)
+
+        data = data + self.patch_position_embeddings  # (b, input_len, p*p, d)
+
+        reg_tokens = self.register_tokens.expand(bs, data.size(1), -1, -1)
+
+        data = torch.cat([data, reg_tokens], dim=2)
+
+        match self.time_embed_type:
+            case "continuous":
+                time_embeddings = self.time_proj(times[:, skip_len:])[:, :, None]  # (bs, input_len, 1, dim)
+                data = data + time_embeddings
+            case "learnable":
+                time_embeddings = self.time_embed[:, skip_len : times.size(1)]  # (bs, input_len, 1, dim)
+                data = data + time_embeddings
+
+        data = data.reshape(bs, -1, self.dim)
+        return data
+
+    def decode(self, data_output):
+        """
+        Input:
+            data_output:     Tensor (bs, query_len, dim)
+                             query_len = output_len * patch_num * patch_num
+        Output:
+            data_output:     Tensor (bs, output_len, x_num, x_num, data_dim)
+        """
+        bs = data_output.size(0)
+        data_output = rearrange(data_output, "b (t s) d -> (b t) s d", s=self.seq_len_per_step)
+        data_output = data_output[:, : self.data_len_per_step]
+        data_output = rearrange(
+            data_output,
+            "b (h w) d -> b d h w",
+            h=self.config.patch_num_output,
+            w=self.config.patch_num_output,
+        )
+        data_output = self.post_proj(data_output)  # (bs*output_len, data_dim, x_num, x_num)
         data_output = rearrange(data_output, "(b t) c h w -> b t h w c", b=bs)
         return data_output

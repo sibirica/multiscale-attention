@@ -2,7 +2,7 @@ from logging import getLogger
 import torch
 from tabulate import tabulate
 
-from .bcat import BCAT
+from .bcat import BCAT, BCAT_Reg
 from .causal import BCAT_causal
 from .baselines import FNO, UNet, ViT, DeepONet
 from .space_time import ST_auto
@@ -34,6 +34,11 @@ def build_model(params, model_config, data_config, symbol_env):
             in_ch=data_config.max_output_dimension,
             mid_ch=config.mid_ch,
             ch_mult=config.ch_mult,
+        )
+
+    elif name == "bcat_reg_auto":
+        modules["model"] = BCAT_Reg(
+            model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
         )
 
     elif name == "bcat_auto":
