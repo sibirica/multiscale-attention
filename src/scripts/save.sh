@@ -1,0 +1,20 @@
+## save outputs for visual
+
+# bcat
+expid=bcat_1
+python main.py eval_only=1 use_wandb=0 exp_name=save eval_from_exp=checkpoint/ts/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 data=arena save_outputs=1 eval_size=1 data.max_output_dimension=4
+
+# vqcae + bcat
+expid=vqbcat_2
+python main.py eval_only=1 use_wandb=0 exp_name=save eval_from_exp=checkpoint/ts/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 data=arena model=vq_bcat save_outputs=1 eval_size=1
+
+# vae + bcat
+expid=bcat_2
+python main.py eval_only=1 use_wandb=0 exp_name=save eval_from_exp=checkpoint/ts/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 data=arena model=bcat_resnet save_outputs=1 eval_size=1
+
+# bcat + register tokens
+expid=bcat_5
+python main.py eval_only=1 use_wandb=0 exp_name=save eval_from_exp=checkpoint/ts/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 data=arena model=bcat_reg save_outputs=1 eval_size=1
+
+
+
