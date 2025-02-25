@@ -17,4 +17,4 @@ GPUs=0,1
 
 # torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py dryrun=1 batch_size=28 data=arena compile=1 optim=wsd max_epoch=20 model=bcat_resnet
 
-python main.py dryrun=1 batch_size=8 data=arena_u data.t_num=2 input_len=1 compile=0 optim=wsd max_epoch=20 model=diffusion
+python main.py dryrun=1 batch_size=64 data=arena_u data.t_num=2 input_len=1 compile=1 optim=wsd max_epoch=20 model=diffusion ema.enable=1

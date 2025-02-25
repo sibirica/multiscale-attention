@@ -38,6 +38,8 @@ class Trainer(object):
         if params.multi_gpu:
             logger.info("Using nn.parallel.DistributedDataParallel ...")
             for k in self.modules.keys():
+                if k.endswith("_ema"):
+                    continue
                 self.modules[k] = nn.parallel.DistributedDataParallel(
                     self.modules[k],
                     device_ids=[params.local_rank],
@@ -219,6 +221,9 @@ class Trainer(object):
                     self.scheduler.step()
                 optimizer.zero_grad()
 
+                if params.ema.enable:
+                    self.modules["model_ema"].update()
+
         # AMP optimization
         else:
             self.scaler.scale(loss).backward()
@@ -233,6 +238,9 @@ class Trainer(object):
                 if self.scheduler is not None:
                     self.scheduler.step()
                 optimizer.zero_grad()
+
+                if params.ema.enable:
+                    self.modules["model_ema"].update()
 
     def print_stats(self):
         """
@@ -552,6 +560,8 @@ class Trainer(object):
             model_input["data_input"] = data_input
             if train:
                 model_input["data_label"] = data_label
+            else:
+                model_input["data_mask"] = data_mask[:1, :1, :, :, :]  # (1, 1, 1, 1, dim)
 
         else:
             # prepare inputs for operator / 1 step training

@@ -1,6 +1,7 @@
 from logging import getLogger
 import torch
 from tabulate import tabulate
+from ema_pytorch import EMA
 
 from .bcat import BCAT, BCAT_Reg
 from .causal import BCAT_causal
@@ -68,12 +69,31 @@ def build_model(params, model_config, data_config, symbol_env):
     else:
         assert False, f"Model {name} hasn't been implemented"
 
+    if params.is_master and params.ema.enable and (not params.eval_only):
+        logger.info(f"Using EMA for model parameters")
+        modules["model_ema"] = EMA(
+            modules["model"],
+            beta=params.ema.beta,
+            update_after_step=params.ema.update_after_step,
+            update_every=params.ema.update_every,
+            power=params.ema.power,
+            include_online_model=False,
+        )
+    else:
+        if not params.eval_only:
+            params.ema.enable = False
+
     # reload pretrained modules
     if params.reload_model:
         logger.info(f"Reloading modules from {params.reload_model} ...")
         reloaded = torch.load(params.reload_model, weights_only=False)
         for k, v in modules.items():
             assert k in reloaded, f"{k} not in save"
+
+            if params.ema.enable and k + "_ema" in reloaded:
+                logger.info(f"Reloading EMA weights for {k} ...")
+                k = k + "_ema"
+
             if all([k2.startswith("module.") for k2 in reloaded[k].keys()]):
                 reloaded[k] = {k2[len("module.") :]: v2 for k2, v2 in reloaded[k].items()}
             if all([k2.startswith("_orig_mod.") for k2 in reloaded[k].keys()]):
@@ -82,7 +102,10 @@ def build_model(params, model_config, data_config, symbol_env):
 
     # log
     for k, v in modules.items():
+        if k.endswith("_ema"):
+            continue
         logger.info(f"{k}: {v}")
+
     for k, v in modules.items():
         s = f"Number of parameters ({k}): {sum([p.numel() for p in v.parameters() if p.requires_grad]):,}"
         if hasattr(v, "summary"):
@@ -103,6 +126,9 @@ def build_model(params, model_config, data_config, symbol_env):
 
     if params.compile:
         for k, v in modules.items():
+            if k.endswith("_ema"):
+                continue
+
             # modules[k] = torch.compile(v, mode="reduce-overhead")
             modules[k] = torch.compile(v)
 

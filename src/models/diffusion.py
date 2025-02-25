@@ -3,6 +3,7 @@ import torch.nn as nn
 from einops import rearrange
 
 import diffusers
+from diffusers.pipelines import DiffusionPipeline
 from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel
 
 from logging import getLogger
@@ -85,4 +86,49 @@ class I2IDiffusion(nn.Module):
         Output:
             data_output:     Tensor   (bs, output_len=1, x_num, x_num, data_dim)
         """
-        raise NotImplementedError
+        data_input = rearrange(data_input, "b 1 x y c -> b c x y")
+        pipeline = DDPMCondPipeline(unet=self.unet2d, scheduler=self.noise_scheduler)
+        data_output = pipeline(condition=data_input, num_inference_steps=self.config.ddpm_num_steps)
+
+        data_output = rearrange(data_output, "b c x y -> b 1 x y c")
+        # data_output = data_output * data_mask
+        return data_output
+
+
+class DDPMCondPipeline(DiffusionPipeline):
+    """
+    Pipeline for conditioned image generation. Modified from diffusers.DDPMPipeline
+    """
+
+    model_cpu_offload_seq = "unet"
+
+    def __init__(self, unet, scheduler):
+        super().__init__()
+        self.register_modules(unet=unet, scheduler=scheduler)
+
+    @torch.no_grad()
+    def __call__(
+        self,
+        condition,
+        generator=None,
+        num_inference_steps: int = 1000,
+    ):
+        """
+        condition: Tensor (b, c, x, y)
+        """
+        # Sample gaussian noise to begin loop
+        image = torch.randn_like(condition)
+
+        # set step values
+        self.scheduler.set_timesteps(num_inference_steps)
+
+        # for t in self.progress_bar(self.scheduler.timesteps):
+        for t in self.scheduler.timesteps:
+            # 1. predict noise model_output
+            model_input = torch.cat([image, condition], dim=1)
+            model_output = self.unet(model_input, t).sample
+
+            # 2. compute previous image: x_t -> x_t-1
+            image = self.scheduler.step(model_output, t, image, generator=generator).prev_sample
+
+        return image
