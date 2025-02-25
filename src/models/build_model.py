@@ -8,6 +8,7 @@ from .baselines import FNO, UNet, ViT, DeepONet
 from .space_time import ST_auto
 from .vq_bcat import VQBCAT
 from .vq.vqvae import VQModelWrapper
+from .diffusion import I2IDiffusion
 
 logger = getLogger()
 
@@ -48,6 +49,9 @@ def build_model(params, model_config, data_config, symbol_env):
         modules["model"] = BCAT_causal(
             model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
         )
+
+    elif name == "diffusion2d":
+        modules["model"] = I2IDiffusion(model_config, data_config.x_num, data_config.max_output_dimension)
 
     elif name == "fno":
         modules["model"] = FNO(model_config, data_config.max_output_dimension)

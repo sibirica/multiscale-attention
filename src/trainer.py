@@ -402,6 +402,20 @@ class Trainer(object):
         loss = F.cross_entropy(output, target)
         return loss
 
+    def diffusion_loss_fn(self, output, noise, data_mask):
+        """
+        input shape: (b, c, x, y)
+            NOTE: ignore mask for now
+        """
+        match self.params.model.prediction_type:
+            case "epsilon":
+                loss = F.mse_loss(output.float(), noise.float())  # this could have different weights!
+            case "sample":
+                raise NotImplementedError
+            case _:
+                raise ValueError(f"Unsupported prediction type: {self.params.model.prediction_type}")
+        return loss
+
     def data_loss_fn(self, data_output, data_label, data_mask):
         """
         data_output/data_label: Tensor (bs, output_len, x_num, x_num, dim)
@@ -529,6 +543,16 @@ class Trainer(object):
 
             model_input["times"] = to_cuda(t[..., None])  # (1, t_num, 1)
 
+        elif self.params.model.name.startswith("diffusion"):
+            data_label = data[:, input_len:]  # (bs, output_len, x_num, x_num, dim)
+            data_input, data_label, data_mask = to_cuda(data_input, data_label, data_mask)
+
+            data_input, data_label, mean, std = self.normalize_data(data_input, data_label)
+
+            model_input["data_input"] = data_input
+            if train:
+                model_input["data_label"] = data_label
+
         else:
             # prepare inputs for operator / 1 step training
 
@@ -589,6 +613,9 @@ class Trainer(object):
             if self.params.model.name.startswith("vq"):
                 data_output, labels = model("fwd", **model_input)
                 data_loss = self.vq_loss_fn(data_output, labels, d["data_mask"])
+            elif self.params.model.name.startswith("diffusion"):
+                data_output, noise = model("fwd", **model_input)
+                data_loss = self.diffusion_loss_fn(data_output, noise, d["data_mask"])
             else:
                 data_output = model("fwd", **model_input)  # (bs, output_len, x_num, x_num, data_dim)
 
