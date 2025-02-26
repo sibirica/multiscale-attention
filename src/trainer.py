@@ -410,16 +410,19 @@ class Trainer(object):
         loss = F.cross_entropy(output, target)
         return loss
 
-    def diffusion_loss_fn(self, output, noise, data_mask):
+    def diffusion_loss_fn(self, output_d, data_mask):
         """
         input shape: (b, c, x, y)
             NOTE: ignore mask for now
         """
         match self.params.model.prediction_type:
             case "epsilon":
+                output, noise = output_d["output"], output_d["noise"]
                 loss = F.mse_loss(output.float(), noise.float())  # this could have different weights!
             case "sample":
-                raise NotImplementedError
+                output, label, weights = output_d["output"], output_d["label"], output_d["snr_weights"]
+                loss = weights * F.mse_loss(output.float(), label.float(), reduction="none")
+                loss = loss.mean()
             case _:
                 raise ValueError(f"Unsupported prediction type: {self.params.model.prediction_type}")
         return loss
@@ -624,8 +627,8 @@ class Trainer(object):
                 data_output, labels = model("fwd", **model_input)
                 data_loss = self.vq_loss_fn(data_output, labels, d["data_mask"])
             elif self.params.model.name.startswith("diffusion"):
-                data_output, noise = model("fwd", **model_input)
-                data_loss = self.diffusion_loss_fn(data_output, noise, d["data_mask"])
+                output_d = model("fwd", **model_input)
+                data_loss = self.diffusion_loss_fn(output_d, d["data_mask"])
             else:
                 data_output = model("fwd", **model_input)  # (bs, output_len, x_num, x_num, data_dim)
 

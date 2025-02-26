@@ -69,7 +69,7 @@ def build_model(params, model_config, data_config, symbol_env):
     else:
         assert False, f"Model {name} hasn't been implemented"
 
-    if params.is_master and params.ema.enable and (not params.eval_only):
+    if params.ema.enable and (params.is_master or (not params.eval_only)):
         logger.info(f"Using EMA for model parameters")
         modules["model_ema"] = EMA(
             modules["model"],
@@ -80,8 +80,7 @@ def build_model(params, model_config, data_config, symbol_env):
             include_online_model=False,
         )
     else:
-        if not params.eval_only:
-            params.ema.enable = False
+        params.ema.enable = False
 
     # reload pretrained modules
     if params.reload_model:
@@ -90,15 +89,15 @@ def build_model(params, model_config, data_config, symbol_env):
         for k, v in modules.items():
             assert k in reloaded, f"{k} not in save"
 
-            if params.ema.enable and k + "_ema" in reloaded:
-                logger.info(f"Reloading EMA weights for {k} ...")
-                k = k + "_ema"
-
             if all([k2.startswith("module.") for k2 in reloaded[k].keys()]):
                 reloaded[k] = {k2[len("module.") :]: v2 for k2, v2 in reloaded[k].items()}
             if all([k2.startswith("_orig_mod.") for k2 in reloaded[k].keys()]):
                 reloaded[k] = {k2[len("_orig_mod.") :]: v2 for k2, v2 in reloaded[k].items()}
             v.load_state_dict(reloaded[k])
+
+    if params.ema.enable and params.eval_only:
+        modules["model"].load_state_dict(modules["model_ema"].ema_model.state_dict())
+        del modules["model_ema"]
 
     # log
     for k, v in modules.items():
