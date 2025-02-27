@@ -10,3 +10,4 @@ up_block_types: ["AttnUpBlock2D", "UpBlock2D", "UpBlock2D", "UpBlock2D"]
 ddpm_num_steps: 1000
 ddpm_beta_schedule: linear
 prediction_type: epsilon
+variance_type: fixed_small # fixed_small, fixed_large, fixed_large_log, learned_range
