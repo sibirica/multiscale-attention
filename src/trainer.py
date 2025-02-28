@@ -101,10 +101,7 @@ class Trainer(object):
         if not params.use_raw_time:
             self.input_len = params.input_len
             self.output_len = params.data.t_num - self.input_len
-            if params.rollout:
-                self.t = torch.linspace(0, 10, self.input_len + 1, dtype=torch.float32)[None]  # (1, t_num)
-            else:
-                self.t = torch.linspace(0, 10, params.data.t_num, dtype=torch.float32)[None]  # (1, t_num)
+            self.t = torch.linspace(0, 10, params.data.t_num, dtype=torch.float32)[None]  # (1, t_num)
 
     def set_parameters(self):
         """

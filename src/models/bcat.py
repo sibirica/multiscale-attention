@@ -121,6 +121,8 @@ class BCAT(nn.Module):
             return self.fwd(**kwargs)
         elif mode == "generate":
             return self.generate(**kwargs)
+        elif mode == "rollout":
+            return self.rollout(**kwargs)
         else:
             raise Exception(f"Unknown mode: {mode}")
 
@@ -228,6 +230,46 @@ class BCAT(nn.Module):
             data_all[:, cur_len : cur_len + 1] = new_output
             prev_len = cur_len
             cur_len += 1
+
+        return data_all[:, input_len:]
+
+    @torch.compiler.disable()
+    def rollout(self, data_input, times, input_len: int, data_mask, normalizer, carry_over_c=-1, **kwargs):
+        """
+        Inputs:
+            data_input:    Tensor     (bs, input_len=1, x_num, x_num, data_dim)
+            times:         Tensor     (bs/1, input_len+output_len, 1)
+            data_mask:     Tensor     (1, 1, 1, 1, data_dim)
+            carry_over_c:  int        Indicate channel that should be carried over,
+                                        not masked out or from output (e.g. boundary mask channel)
+
+        Output:
+            data_output:     Tensor     (bs, output_len, x_num, x_num, data_dim)
+        """
+        assert input_len == 1
+        t_num = times.size(1)
+        bs, _, x_num, _, data_dim = data_input.size()
+
+        data_all = torch.zeros(bs, t_num, x_num, x_num, data_dim, dtype=data_input.dtype, device=data_input.device)
+        data_all[:, :input_len] = data_input
+
+        for i in range(input_len, t_num):
+            cur_data_input = data_all[:, i - 1 : i]  # (bs, 1, x_num, x_num, data_dim)
+            cur_data_input, _, mean, std = normalizer(cur_data_input)
+
+            cur_data_input = self.embedder.encode(cur_data_input, times[:, :1])  # (bs, data_len, dim)
+
+            mask = None
+            cur_data_encoded = self.transformer(cur_data_input, mask)  # (bs, data_len, dim)
+
+            new_output = self.embedder.decode(cur_data_encoded)  # (bs, 1, x_num, x_num, data_dim)
+            new_output = new_output * data_mask  # (bs, 1, x_num, x_num, data_dim)
+            new_output = new_output * std + mean
+
+            if carry_over_c >= 0:
+                new_output[:, 0, :, :, carry_over_c] = data_all[:, 0, :, :, carry_over_c]
+
+            data_all[:, i : i + 1] = new_output
 
         return data_all[:, input_len:]
 
