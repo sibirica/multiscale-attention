@@ -141,6 +141,18 @@ class Trainer(object):
                     weight_decay=params.optim.weight_decay,
                     growth_rate=1.05,
                 )
+
+            case "nadam":
+                self.optimizer = torch.optim.NAdam(
+                    self.parameters["model"],
+                    lr=params.optim.lr,
+                    weight_decay=params.optim.weight_decay,
+                    eps=params.optim.get("eps", 1e-8),
+                    amsgrad=params.optim.get("amsgrad", False),
+                    betas=(0.9, params.optim.get("beta2", 0.999)),
+                    decoupled_weight_decay=True,
+                )
+
             case _:
                 raise ValueError(f"Unknown optimizer type: {params.optim.type}")
 
@@ -412,7 +424,7 @@ class Trainer(object):
         input shape: (b, c, x, y)
             NOTE: ignore mask for now
         """
-        match self.params.model.prediction_type:
+        match self.params.model.scheduler.prediction_type:
             case "epsilon":
                 output, noise = output_d["output"], output_d["noise"]
                 loss = F.mse_loss(output.float(), noise.float())  # this could have different weights!
