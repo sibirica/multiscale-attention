@@ -72,7 +72,7 @@ def main(params: DictConfig):
         assert torch.cuda.is_available()
     utils.misc.CUDA = not params.cpu
 
-    if params.optim.type in ["adamw", "adan"]:
+    if "warmup" in params.optim:
         if params.optim.warmup is not None and params.optim.warmup < 1:
             params.optim.warmup = max(
                 1, int(params.optim.warmup * params.max_epoch * params.n_steps_per_epoch // params.accumulate_gradients)

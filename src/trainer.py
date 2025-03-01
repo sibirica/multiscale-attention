@@ -12,6 +12,7 @@ from utils.misc import to_cuda, set_worker_sharing_strategy
 from dataset import get_dataset
 from data_utils.collate import custom_collate
 from dadaptation import DAdaptAdan
+from utils.muon import Muon
 
 logger = getLogger()
 
@@ -52,9 +53,7 @@ class Trainer(object):
         self.set_optimizer()
 
         # amp
-        self.scaler = None
-        if params.amp:
-            self.scaler = torch.amp.GradScaler("cpu" if params.cpu else "cuda")
+        self.scaler = torch.amp.GradScaler("cpu" if params.cpu else "cuda", enabled=bool(params.amp))
 
         # validation metrics
         self.metrics = []
@@ -153,6 +152,23 @@ class Trainer(object):
                     decoupled_weight_decay=True,
                 )
 
+            case "muon":
+                named_params = []
+                for v in self.modules.values():
+                    named_params.extend([(k, p) for k, p in v.named_parameters() if p.requires_grad])
+
+                muon_params = [p for n, p in named_params if p.ndim >= 2 and "embed" not in n]
+                adam_params = [p for n, p in named_params if p.ndim < 2 or "embed" in n]
+
+                self.optimizer = Muon(
+                    lr=params.optim.lr,
+                    wd=params.optim.weight_decay,
+                    muon_params=muon_params,
+                    adamw_params=adam_params,
+                    adamw_betas=(0.9, params.optim.get("beta2", 0.95)),
+                    adamw_eps=params.optim.get("eps", 1e-8),
+                )
+
             case _:
                 raise ValueError(f"Unknown optimizer type: {params.optim.type}")
 
@@ -211,45 +227,27 @@ class Trainer(object):
 
         params = self.params
 
-        # optimizer
-        optimizer = self.optimizer
-
         if params.accumulate_gradients > 1:
             loss = loss / params.accumulate_gradients
 
-        # regular optimization
-        if not params.amp:
-            loss.backward()
+        # optimizer
 
-            if (self.n_iter + 1) % params.accumulate_gradients == 0:
-                if params.clip_grad_norm > 0:
-                    grad_norm = clip_grad_norm_(self.parameters["model"], params.clip_grad_norm)
-                    self.grad_norm = grad_norm.item()
-                optimizer.step()
-                if self.scheduler is not None:
-                    self.scheduler.step()
-                optimizer.zero_grad()
+        optimizer = self.optimizer
+        self.scaler.scale(loss).backward()
 
-                if params.ema.enable:
-                    self.modules["model_ema"].update()
+        if (self.n_iter + 1) % params.accumulate_gradients == 0:
+            if params.clip_grad_norm > 0:
+                self.scaler.unscale_(optimizer)
+                grad_norm = clip_grad_norm_(self.parameters["model"], params.clip_grad_norm)
+                self.grad_norm = grad_norm.item()
+            self.scaler.step(optimizer)
+            self.scaler.update()
+            if self.scheduler is not None:
+                self.scheduler.step()
+            optimizer.zero_grad()
 
-        # AMP optimization
-        else:
-            self.scaler.scale(loss).backward()
-
-            if (self.n_iter + 1) % params.accumulate_gradients == 0:
-                if params.clip_grad_norm > 0:
-                    self.scaler.unscale_(optimizer)
-                    grad_norm = clip_grad_norm_(self.parameters["model"], params.clip_grad_norm)
-                    self.grad_norm = grad_norm.item()
-                self.scaler.step(optimizer)
-                self.scaler.update()
-                if self.scheduler is not None:
-                    self.scheduler.step()
-                optimizer.zero_grad()
-
-                if params.ema.enable:
-                    self.modules["model_ema"].update()
+            if params.ema.enable:
+                self.modules["model_ema"].update()
 
     def print_stats(self):
         """
