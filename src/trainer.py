@@ -160,6 +160,12 @@ class Trainer(object):
                 muon_params = [p for n, p in named_params if p.ndim >= 2 and "embed" not in n]
                 adam_params = [p for n, p in named_params if p.ndim < 2 or "embed" in n]
 
+                # # check embed parameters
+                # adam_param_names = [n for n, p in named_params if "embed" in n]
+                # for s in adam_param_names:
+                #     logger.info(s)
+                # exit()
+
                 self.optimizer = Muon(
                     lr=params.optim.lr,
                     wd=params.optim.weight_decay,

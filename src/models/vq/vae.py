@@ -6,12 +6,15 @@ Sources: https://github.com/FoundationVision/VAR/blob/main/models/basic_vae.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
 
 
 __all__ = [
     "Encoder",
     "Decoder",
 ]
+
+FLASH_ATTN = True
 
 
 def Normalize(in_channels, num_groups=32):
@@ -68,27 +71,36 @@ class AttnBlock(nn.Module):
 
         self.norm = Normalize(in_channels)
         self.qkv = torch.nn.Conv2d(in_channels, 3 * in_channels, kernel_size=1, stride=1, padding=0)
-        self.w_ratio = int(in_channels) ** (-0.5)
         self.proj_out = torch.nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+
+        if not FLASH_ATTN:
+            self.w_ratio = int(in_channels) ** (-0.5)
 
     def forward(self, x):
         qkv = self.qkv(self.norm(x))
         B, _, H, W = qkv.shape  # should be B,3C,H,W
         C = self.C
-        q, k, v = qkv.reshape(B, 3, C, H, W).unbind(1)
+        q, k, v = qkv.reshape(B, 3, C, H, W).unbind(1)  # B,C,H,W
 
-        # compute attention
-        q = q.view(B, C, H * W).contiguous()
-        q = q.permute(0, 2, 1).contiguous()  # B,HW,C
-        k = k.view(B, C, H * W).contiguous()  # B,C,HW
-        w = torch.bmm(q, k).mul_(self.w_ratio)  # B,HW,HW    w[B,i,j]=sum_c q[B,i,C]k[B,C,j]
-        w = F.softmax(w, dim=2)
+        if FLASH_ATTN:
+            q, k, v = map(
+                lambda y: rearrange(y, "b c h w -> b 1 (h w) c").contiguous(), (q, k, v)
+            )  # (B,C,H,W) -> (B,1,HW,C)
+            h = F.scaled_dot_product_attention(q, k, v)
+            h = rearrange(h, "b 1 (h w) c -> b c h w", h=H, w=W).contiguous()
+        else:
+            # compute attention
+            q = q.view(B, C, H * W).contiguous()
+            q = q.permute(0, 2, 1).contiguous()  # B,HW,C
+            k = k.view(B, C, H * W).contiguous()  # B,C,HW
+            w = torch.bmm(q, k).mul_(self.w_ratio)  # B,HW,HW    w[B,i,j]=sum_c q[B,i,C]k[B,C,j]
+            w = F.softmax(w, dim=2)
 
-        # attend to values
-        v = v.view(B, C, H * W).contiguous()
-        w = w.permute(0, 2, 1).contiguous()  # B,HW,HW (first HW of k, second of q)
-        h = torch.bmm(v, w)  # B, C,HW (HW of q) h[B,C,j] = sum_i v[B,C,i] w[B,i,j]
-        h = h.view(B, C, H, W).contiguous()
+            # attend to values
+            v = v.view(B, C, H * W).contiguous()
+            w = w.permute(0, 2, 1).contiguous()  # B,HW,HW (first HW of k, second of q)
+            h = torch.bmm(v, w)  # B, C,HW (HW of q) h[B,C,j] = sum_i v[B,C,i] w[B,i,j]
+            h = h.view(B, C, H, W).contiguous()
 
         return x + self.proj_out(h)
 

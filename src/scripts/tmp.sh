@@ -8,3 +8,8 @@ GPUs=0,1
 # torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py dryrun=1 batch_size=28 data=arena compile=1 optim=wsd max_epoch=20 model=bcat_resnet
 # python main.py dryrun=1 batch_size=64 data=arena_u data.t_num=2 input_len=1 compile=1 optim=wsd max_epoch=20 model=diffusion ema.enable=1
 # python main.py dryrun=1 batch_size=64 data=arena_u data.t_num=2 input_len=1 compile=1 optim=wsd max_epoch=40 model=diffusion ema.enable=1 eval_size=100 model.prediction_type=sample
+
+
+
+expid=bcat_2
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=debug eval_from_exp=checkpoint/ts/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 data=arena model=bcat_resnet
