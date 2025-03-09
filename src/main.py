@@ -212,12 +212,11 @@ def main(params: DictConfig):
     max_mem = torch.cuda.max_memory_allocated() / 1024**2
     logger.info("MEM: {:.2f} MB".format(max_mem))
 
-    if params.multi_gpu:
-        torch.distributed.destroy_process_group()
-
-    if params.use_wandb:
-        wandb.finish()
-
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        wandb.finish()
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
