@@ -157,14 +157,25 @@ class Trainer(object):
                 for v in self.modules.values():
                     named_params.extend([(k, p) for k, p in v.named_parameters() if p.requires_grad])
 
-                muon_params = [p for n, p in named_params if p.ndim >= 2 and "embed" not in n]
-                adam_params = [p for n, p in named_params if p.ndim < 2 or "embed" in n]
+                # parameters containing these will be sent to adam
+                adam_keys = ["embed"]
+                # adam_keys = ["embedding", "in_proj", "head"]
 
-                # # check embed parameters
-                # adam_param_names = [n for n, p in named_params if "embed" in n]
-                # for s in adam_param_names:
-                #     logger.info(s)
-                # exit()
+                muon_params, adam_params = [], []
+                muon_param_count = adam_param_count = 0
+                for n, p in named_params:
+                    if p.requires_grad:
+                        if p.ndim < 2 or any([s in n for s in adam_keys]):
+                            adam_params.append(p)
+                            adam_param_count += p.numel()
+
+                            # if p.ndim >= 2:
+                            #     logger.info(n)
+                        else:
+                            muon_params.append(p)
+                            muon_param_count += p.numel()
+
+                logger.info(f"Muon parameters: {muon_param_count:,}, Adam parameters: {adam_param_count:,}")
 
                 self.optimizer = Muon(
                     lr=params.optim.lr,

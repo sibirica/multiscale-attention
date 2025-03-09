@@ -92,7 +92,7 @@ class Muon(torch.optim.Optimizer):
         # Sort parameters into those for which we will use Muon, and those for which we will not
         for p in muon_params:
             # Use Muon for every parameter in muon_params which is >= 2D and doesn't look like an embedding or head layer
-            assert p.ndim == 2, p.ndim
+            assert p.ndim == 2 or p.ndim == 4, p.ndim
             self.state[p]["use_muon"] = True
         for p in adamw_params:
             # Do not use Muon for parameters in adamw_params
@@ -150,7 +150,7 @@ class Muon(torch.optim.Optimizer):
                     g = g.add(buf, alpha=momentum)
                 else:
                     g = buf
-                u = zeropower_via_newtonschulz5(g, steps=group["ns_steps"])
+                u = zeropower_via_newtonschulz5(g, steps=group["ns_steps"]).view_as(p)
 
                 # scale update
                 adjusted_lr = self.adjust_lr_for_muon(lr, p.shape)

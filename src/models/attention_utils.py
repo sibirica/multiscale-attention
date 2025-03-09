@@ -1,5 +1,5 @@
 """
-This file contains attention layers and related utils. 
+This file contains attention layers and related utils.
 """
 
 import math
@@ -241,18 +241,18 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
             self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout, bias=bias, qk_norm=qk_norm)
         self.rotary = rotary
 
-        # Implementation of Feedforward model
-        if isinstance(activation, str) and activation.endswith("glu"):
-            self.linear1 = nn.Linear(d_model, dim_feedforward * 2, bias=bias, **factory_kwargs)
-        else:
-            self.linear1 = nn.Linear(d_model, dim_feedforward, bias=bias, **factory_kwargs)
-        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
-        self.linear2 = nn.Linear(dim_feedforward, d_model, bias=bias, **factory_kwargs)
-        if isinstance(activation, str):
-            activation = get_activation(activation)()
-        self.activation = activation
+        # # Implementation of Feedforward model
+        # if isinstance(activation, str) and activation.endswith("glu"):
+        #     self.linear1 = nn.Linear(d_model, dim_feedforward * 2, bias=bias, **factory_kwargs)
+        # else:
+        #     self.linear1 = nn.Linear(d_model, dim_feedforward, bias=bias, **factory_kwargs)
+        # self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        # self.linear2 = nn.Linear(dim_feedforward, d_model, bias=bias, **factory_kwargs)
+        # if isinstance(activation, str):
+        #     activation = get_activation(activation)()
+        # self.activation = activation
 
-        # self.ffn = FFN(d_model, dim_feedforward, activation, dropout)
+        self.ffn = FFN(d_model, dim_feedforward, activation, dropout)
 
         self.norm_first = norm_first
 
@@ -296,8 +296,8 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
                 is_causal=is_causal,
                 rotary_emb=rotary_emb,
             )
-            x = x + self._ff_block(self.norm2(x))
-            # x = x + self.dropout2(self.ffn(self.norm2(x)))
+            # x = x + self._ff_block(self.norm2(x))
+            x = x + self.dropout2(self.ffn(self.norm2(x)))
         else:
             x = self.norm1(
                 x
@@ -305,8 +305,8 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
                     x, src_mask, src_key_padding_mask, block_mask=block_mask, is_causal=is_causal, rotary_emb=rotary_emb
                 )
             )
-            x = self.norm2(x + self._ff_block(x))
-            # x = self.norm2(x + self.dropout2(self.ffn(x)))
+            # x = self.norm2(x + self._ff_block(x))
+            x = self.norm2(x + self.dropout2(self.ffn(x)))
         return x
 
     def _sa_block(
@@ -452,8 +452,8 @@ class CacheCustomTransformerEncoderLayer(CustomTransformerEncoderLayer):
             rotary_emb=rotary_emb,
             cache=cache,
         )
-        x = x + self._ff_block(self.norm2(x))
-        # x = x + self.dropout2(self.ffn(self.norm2(x)))
+        # x = x + self._ff_block(self.norm2(x))
+        x = x + self.dropout2(self.ffn(self.norm2(x)))
 
         return x
 
