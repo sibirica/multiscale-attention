@@ -1,5 +1,5 @@
 """
-Autoregressive VQ-BCAT model. 
+Autoregressive VQ-BCAT model.
 """
 
 from logging import getLogger
@@ -71,6 +71,7 @@ class VQBCAT(nn.Module):
             "nhead": config.n_head,
             "dim_feedforward": config.dim_ffn,
             "dropout": config.dropout,
+            "attn_dropout": config.get("attn_dropout", 0),
             "activation": config.get("activation", "gelu"),
             "norm_first": config.norm_first,
             "norm": norm,

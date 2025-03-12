@@ -376,7 +376,7 @@ class Trainer(object):
         """
         if not self.params.is_master:
             return
-        if self.params.save_periodic > 0 and self.epoch > 0 and self.epoch % self.params.save_periodic == 0:
+        if self.params.save_periodic > 0 and self.epoch > 0 and (self.epoch + 1) % self.params.save_periodic == 0:
             self.save_checkpoint("periodic-%i" % self.epoch)
 
     def save_best_model(self, scores, prefix=None, suffix=None):

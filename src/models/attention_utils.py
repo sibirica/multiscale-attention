@@ -38,10 +38,11 @@ class FFN(nn.Module):
             self.fc1 = nn.Linear(dim, hidden_dim)
 
         self.activation = get_activation(act)()
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.fc2 = nn.Linear(hidden_dim, dim)
 
     def forward(self, x):
-        return self.fc2(self.activation(self.fc1(x)))
+        return self.fc2(self.dropout(self.activation(self.fc1(x))))
 
 
 class MultiheadAttention(nn.Module):
@@ -220,7 +221,8 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
         d_model: int,
         nhead: int,
         dim_feedforward: int = 2048,
-        dropout: float = 0.1,
+        dropout: float = 0,
+        attn_dropout: float = 0,
         activation: Union[str, Callable[[Tensor], Tensor]] = F.relu,
         layer_norm_eps: float = 1e-5,
         norm_first: bool = False,
@@ -236,9 +238,9 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
         super(nn.TransformerEncoderLayer, self).__init__()
 
         if flex_attn:
-            self.self_attn = MultiheadFlexAttention(d_model, nhead, dropout=dropout, bias=bias, qk_norm=qk_norm)
+            self.self_attn = MultiheadFlexAttention(d_model, nhead, dropout=attn_dropout, bias=bias, qk_norm=qk_norm)
         else:
-            self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout, bias=bias, qk_norm=qk_norm)
+            self.self_attn = MultiheadAttention(d_model, nhead, dropout=attn_dropout, bias=bias, qk_norm=qk_norm)
         self.rotary = rotary
 
         # # Implementation of Feedforward model
