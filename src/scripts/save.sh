@@ -16,5 +16,8 @@ python main.py eval_only=1 use_wandb=0 exp_name=save eval_from_exp=checkpoint/ts
 expid=bcat_5
 python main.py eval_only=1 use_wandb=0 exp_name=save eval_from_exp=checkpoint/ts/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 data=arena model=bcat_reg save_outputs=1 eval_size=1
 
+# vanilla bcat + Muon optimizer
+expid=bcat_muon_6
+python main.py eval_only=1 use_wandb=0 exp_name=save eval_from_exp=checkpoint/ts/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 data=arena save_outputs=1 eval_size=1
 
 

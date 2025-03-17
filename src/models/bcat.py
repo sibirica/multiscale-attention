@@ -15,6 +15,7 @@ from .attention_utils import (
     CustomTransformerEncoderLayer,
     CacheCustomTransformerEncoder,
     CacheCustomTransformerEncoderLayer,
+    DynamicTanh,
 )
 from .embedder import get_embedder
 from .kv_cache import KVCache
@@ -60,6 +61,8 @@ class BCAT(nn.Module):
         match config.get("norm", "layer"):
             case "rms":
                 norm = nn.RMSNorm
+            case "dyt":
+                norm = DynamicTanh
             case _:
                 norm = nn.LayerNorm
 
