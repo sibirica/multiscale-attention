@@ -147,7 +147,6 @@ class Trainer(object):
                     lr=params.optim.lr,
                     weight_decay=params.optim.weight_decay,
                     eps=params.optim.get("eps", 1e-8),
-                    amsgrad=params.optim.get("amsgrad", False),
                     betas=(0.9, params.optim.get("beta2", 0.999)),
                     decoupled_weight_decay=True,
                 )
