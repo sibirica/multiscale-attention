@@ -32,17 +32,22 @@ class FFN(nn.Module):
     def __init__(self, dim, hidden_dim, act="gelu", dropout=0):
         super().__init__()
 
+        self.fc1 = nn.Linear(dim, hidden_dim)
+
         if act.endswith("glu"):
-            self.fc1 = nn.Linear(dim, hidden_dim * 2)
+            self.fc_gate = nn.Linear(dim, hidden_dim)
         else:
-            self.fc1 = nn.Linear(dim, hidden_dim)
+            self.fc_gate = None
 
         self.activation = get_activation(act)()
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.fc2 = nn.Linear(hidden_dim, dim)
 
     def forward(self, x):
-        return self.fc2(self.dropout(self.activation(self.fc1(x))))
+        if self.fc_gate is None:
+            return self.fc2(self.dropout(self.activation(self.fc1(x))))
+        else:
+            return self.fc2(self.dropout(self.activation(self.fc1(x), self.fc_gate(x))))
 
 
 class MultiheadAttention(nn.Module):
@@ -761,16 +766,23 @@ def get_embeddings(size, type=None):
     return patch_embeddings
 
 
-class GeGLU(nn.Module):
-    def forward(self, x):
-        x, gates = x.chunk(2, dim=-1)
-        return x * F.gelu(gates)
+class GLU(nn.Module):
+    def forward(self, x, gates=None):
+        if gates is None:
+            x, gates = x.chunk(2, dim=-1)
+        return self.act(x) * gates
 
 
-class SwiGLU(nn.Module):
-    def forward(self, x):
-        x, gates = x.chunk(2, dim=-1)
-        return x * F.silu(gates)
+class GeGLU(GLU):
+    def __init__(self):
+        super().__init__()
+        self.act = nn.GELU()
+
+
+class SwiGLU(GLU):
+    def __init__(self):
+        super().__init__()
+        self.act = nn.SiLU()
 
 
 def get_activation(act="gelu"):
