@@ -12,6 +12,7 @@ ALL_DATASETS = {
     "incom_ns_arena": ds.IncomNS2DArena,
     "incom_ns_arena_u": ds.IncomNS2DArenaU,
     "cfdbench": ds.CFDBench2D,
+    "fno": ds.FNO2D,
 }
 
 
