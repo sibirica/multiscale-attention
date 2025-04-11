@@ -348,7 +348,7 @@ class Trainer(object):
             except RuntimeError:  # remove the 'module.'
                 weights = {name.partition(".")[2]: v for name, v in data[k].items()}
                 v.load_state_dict(weights)
-            # v.requires_grad = requires_grad  # TODO: check if this works
+            # v.requires_grad = requires_grad
 
         # reload optimizer
         logger.warning("Reloading checkpoint optimizer ...")

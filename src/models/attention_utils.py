@@ -248,17 +248,6 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
             self.self_attn = MultiheadAttention(d_model, nhead, dropout=attn_dropout, bias=bias, qk_norm=qk_norm)
         self.rotary = rotary
 
-        # # Implementation of Feedforward model
-        # if isinstance(activation, str) and activation.endswith("glu"):
-        #     self.linear1 = nn.Linear(d_model, dim_feedforward * 2, bias=bias, **factory_kwargs)
-        # else:
-        #     self.linear1 = nn.Linear(d_model, dim_feedforward, bias=bias, **factory_kwargs)
-        # self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
-        # self.linear2 = nn.Linear(dim_feedforward, d_model, bias=bias, **factory_kwargs)
-        # if isinstance(activation, str):
-        #     activation = get_activation(activation)()
-        # self.activation = activation
-
         self.ffn = FFN(d_model, dim_feedforward, activation, dropout)
 
         self.norm_first = norm_first
@@ -303,7 +292,6 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
                 is_causal=is_causal,
                 rotary_emb=rotary_emb,
             )
-            # x = x + self._ff_block(self.norm2(x))
             x = x + self.dropout2(self.ffn(self.norm2(x)))
         else:
             x = self.norm1(
@@ -312,7 +300,6 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
                     x, src_mask, src_key_padding_mask, block_mask=block_mask, is_causal=is_causal, rotary_emb=rotary_emb
                 )
             )
-            # x = self.norm2(x + self._ff_block(x))
             x = self.norm2(x + self.dropout2(self.ffn(x)))
         return x
 
@@ -422,7 +409,6 @@ class CacheCustomTransformerEncoderLayer(CustomTransformerEncoderLayer):
                 rotary_emb=rotary_emb,
             )
 
-        assert self.norm_first
         assert rotary_emb is None
 
         src_key_padding_mask = F._canonical_mask(
@@ -459,7 +445,6 @@ class CacheCustomTransformerEncoderLayer(CustomTransformerEncoderLayer):
             rotary_emb=rotary_emb,
             cache=cache,
         )
-        # x = x + self._ff_block(self.norm2(x))
         x = x + self.dropout2(self.ffn(self.norm2(x)))
 
         return x
@@ -511,7 +496,6 @@ class CacheCustomTransformerEncoder(CustomTransformerEncoder):
             )
 
         output = src
-        new_token_cache = []
 
         for i, mod in enumerate(self.layers):
             cache.set_layer(i)
@@ -531,11 +515,61 @@ class CacheCustomTransformerEncoder(CustomTransformerEncoder):
         return output
 
 
-class A:
-    pass
+class CustomTransformerDecoder(nn.Module):
+
+    def __init__(
+        self,
+        decoder_layer,
+        num_layers: int,
+        norm: Optional[nn.Module] = None,
+        config=None,
+    ) -> None:
+        super().__init__()
+
+        self.layers = _get_clones(decoder_layer, num_layers)
+        self.num_layers = num_layers
+        self.norm = norm
+
+        if config is not None and config.rotary:
+            self.rotary_emb = RotaryEmbedding(dim=config.dim_emb // config.n_head // 2)
+            # self.rotary_emb = RotaryPositionalEmbeddings(dim=config.dim_emb // config.n_head, max_seq_len=5120)
+            self.rotary = True
+        else:
+            self.rotary_emb = None
+            self.rotary = False
+
+    def forward(
+        self,
+        tgt: Tensor,
+        memory: Tensor,
+        tgt_mask: Optional[Tensor] = None,
+        memory_mask: Optional[Tensor] = None,
+        tgt_key_padding_mask: Optional[Tensor] = None,
+        memory_key_padding_mask: Optional[Tensor] = None,
+        tgt_is_causal=False,
+        memory_is_causal=False,
+    ):
+        output = tgt
+
+        for mod in self.layers:
+            output = mod(
+                output,
+                memory,
+                tgt_mask=tgt_mask,
+                memory_mask=memory_mask,
+                tgt_key_padding_mask=tgt_key_padding_mask,
+                memory_key_padding_mask=memory_key_padding_mask,
+                tgt_is_causal=tgt_is_causal,
+                memory_is_causal=memory_is_causal,
+            )
+
+        if self.norm is not None:
+            output = self.norm(output)
+
+        return output
 
 
-class OperatorDecoderLayer(nn.TransformerDecoderLayer):
+class OperatorDecoderLayer(nn.Module):
     """OperatorDecoderLayer is made up of multi-head-attn and feedforward network.
     (It is the usual encoder-decoder attention without the self-attention layers)
 
@@ -550,52 +584,39 @@ class OperatorDecoderLayer(nn.TransformerDecoderLayer):
         d_model: int,
         nhead: int,
         dim_feedforward: int = 2048,
-        dropout: float = 0.1,
-        activation: Union[str, Callable[[Tensor], Tensor]] = F.relu,
+        dropout: float = 0,
+        attn_dropout=0,
+        activation=F.relu,
         layer_norm_eps: float = 1e-5,
-        batch_first: bool = False,
         norm_first: bool = False,
         bias: bool = True,
         device=None,
         dtype=None,
         rotary=False,
-        custom_attn=False,
         norm=nn.LayerNorm,
+        qk_norm=False,
+        flex_attn=False,
     ) -> None:
         factory_kwargs = {"device": device, "dtype": dtype}
-        super(nn.TransformerDecoderLayer, self).__init__()
-        if custom_attn:
-            assert batch_first
-            self.multihead_attn = MultiheadAttention(d_model, nhead, dropout=dropout, bias=bias)
-            self.rotary = rotary
-            assert not rotary, "currently not supported for operator layers"
-        else:
-            self.multihead_attn = nn.MultiheadAttention(
-                d_model, nhead, dropout=dropout, batch_first=batch_first, bias=bias, **factory_kwargs
-            )
-            self.rotary = False
+        super().__init__()
 
-        # Implementation of Feedforward model
-        self.linear1 = nn.Linear(d_model, dim_feedforward, bias=bias, **factory_kwargs)
-        self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(dim_feedforward, d_model, bias=bias, **factory_kwargs)
+        if flex_attn:
+            self.multihead_attn = MultiheadFlexAttention(
+                d_model, nhead, dropout=attn_dropout, bias=bias, qk_norm=qk_norm
+            )
+        else:
+            self.multihead_attn = MultiheadAttention(d_model, nhead, dropout=attn_dropout, bias=bias, qk_norm=qk_norm)
+        self.rotary = rotary
+
+        self.ffn = FFN(d_model, dim_feedforward, activation, dropout)
 
         self.norm_first = norm_first
 
         self.norm1 = norm(d_model, eps=layer_norm_eps, **factory_kwargs)
         self.norm2 = norm(d_model, eps=layer_norm_eps, **factory_kwargs)
 
-        self.dropout1 = nn.Dropout(dropout)
-        self.dropout2 = nn.Dropout(dropout)
-
-        if isinstance(activation, str):
-            self.activation = get_activation(activation)()
-        else:
-            self.activation = activation
-
-        # small hack to handle pytorch TransformerDecoder
-        self.self_attn = A()
-        self.self_attn.batch_first = batch_first
+        self.dropout1 = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.dropout2 = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
     def forward(
         self,
@@ -609,35 +630,13 @@ class OperatorDecoderLayer(nn.TransformerDecoderLayer):
         memory_is_causal: bool = False,
         rotary_emb=None,
     ) -> Tensor:
-        """Pass the inputs (and mask) through the decoder layer.
-
-        Args:
-            tgt: the sequence to the decoder layer (required).
-            memory: the sequence from the last layer of the encoder (required).
-            memory_mask: the mask for the memory sequence (optional).
-            memory_key_padding_mask: the mask for the memory keys per batch (optional).
-            memory_is_causal: If specified, applies a causal mask as
-                ``memory mask``.
-                Default: ``False``.
-                Warning:
-                ``memory_is_causal`` provides a hint that
-                ``memory_mask`` is the causal mask. Providing incorrect
-                hints can result in incorrect execution, including
-                forward and backward compatibility.
-
-            tgt_mask, tgt_key_padding_mask, tgt_is_causal: NOT needed as there is not
-                self-attention, and will be ignored.
-
-        Shape:
-            see the docs in Transformer class.
-        """
 
         x = tgt
         if self.norm_first:
             x = x + self._mha_block(
                 self.norm1(x), memory, memory_mask, memory_key_padding_mask, memory_is_causal, rotary_emb=rotary_emb
             )
-            x = x + self._ff_block(self.norm2(x))
+            x = x + self.dropout2(self.ffn(self.norm2(x)))
         else:
             x = self.norm1(
                 x
@@ -645,7 +644,7 @@ class OperatorDecoderLayer(nn.TransformerDecoderLayer):
                     x, memory, memory_mask, memory_key_padding_mask, memory_is_causal, rotary_emb=rotary_emb
                 )
             )
-            x = self.norm2(x + self._ff_block(x))
+            x = self.norm2(x + self.dropout2(self.ffn(x)))
 
         return x
 
@@ -656,35 +655,21 @@ class OperatorDecoderLayer(nn.TransformerDecoderLayer):
         mem: Tensor,
         attn_mask: Optional[Tensor],
         key_padding_mask: Optional[Tensor],
+        block_mask=None,
         is_causal: bool = False,
         rotary_emb=None,
     ) -> Tensor:
-        if self.rotary:
-            x = self.multihead_attn(
-                x,
-                mem,
-                mem,
-                attn_mask=attn_mask,
-                key_padding_mask=key_padding_mask,
-                is_causal=is_causal,
-                rotary_emb=rotary_emb,
-            )[0]
-        else:
-            x = self.multihead_attn(
-                x,
-                mem,
-                mem,
-                attn_mask=attn_mask,
-                key_padding_mask=key_padding_mask,
-                is_causal=is_causal,
-                # need_weights=False,
-            )[0]
+        x = self.multihead_attn(
+            x,
+            mem,
+            mem,
+            attn_mask=attn_mask,
+            key_padding_mask=key_padding_mask,
+            block_mask=block_mask,
+            is_causal=is_causal,
+            rotary_emb=rotary_emb,
+        )
         return self.dropout1(x)
-
-    # feed forward block
-    def _ff_block(self, x: Tensor) -> Tensor:
-        x = self.linear2(self.dropout(self.activation(self.linear1(x))))
-        return self.dropout2(x)
 
 
 """

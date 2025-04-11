@@ -10,6 +10,7 @@ from .space_time import ST_auto
 from .vq_bcat import VQBCAT
 from .vq.vqvae import VQModelWrapper
 from .diffusion import I2IDiffusion
+from .prose import PROSE_2to1, PROSE_1to1
 
 logger = getLogger()
 
@@ -21,53 +22,66 @@ def build_model(params, model_config, data_config, symbol_env):
     # get model
     name = model_config.name
 
-    if name == "st_auto":
-        modules["model"] = ST_auto(model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num)
+    match name:
+        case "st_auto":
+            modules["model"] = ST_auto(
+                model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
+            )
 
-    elif name == "vq_bcat_auto":
-        modules["model"] = VQBCAT(model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num)
+        case "vq_bcat_auto":
+            modules["model"] = VQBCAT(
+                model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
+            )
 
-    elif name == "vqvae":
-        config = model_config.embedder
-        modules["model"] = VQModelWrapper(
-            n_embed=config.codebook_size,
-            embed_dim=config.dim,
-            z_ch=config.z_ch,
-            in_ch=data_config.max_output_dimension,
-            mid_ch=config.mid_ch,
-            ch_mult=config.ch_mult,
-        )
+        case "vqvae":
+            config = model_config.embedder
+            modules["model"] = VQModelWrapper(
+                n_embed=config.codebook_size,
+                embed_dim=config.dim,
+                z_ch=config.z_ch,
+                in_ch=data_config.max_output_dimension,
+                mid_ch=config.mid_ch,
+                ch_mult=config.ch_mult,
+            )
 
-    elif name == "bcat_reg_auto":
-        modules["model"] = BCAT_Reg(
-            model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
-        )
+        case "bcat_reg_auto":
+            modules["model"] = BCAT_Reg(
+                model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
+            )
 
-    elif name == "bcat_auto":
-        modules["model"] = BCAT(model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num)
+        case "bcat_auto":
+            modules["model"] = BCAT(
+                model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
+            )
 
-    elif name == "bcat_next_token_auto":
-        modules["model"] = BCAT_causal(
-            model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
-        )
+        case "bcat_next_token_auto":
+            modules["model"] = BCAT_causal(
+                model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
+            )
 
-    elif name == "diffusion2d":
-        modules["model"] = I2IDiffusion(model_config, data_config.x_num, data_config.max_output_dimension)
+        case "diffusion2d":
+            modules["model"] = I2IDiffusion(model_config, data_config.x_num, data_config.max_output_dimension)
 
-    elif name == "fno":
-        modules["model"] = FNO(model_config, data_config.max_output_dimension)
+        case "fno":
+            modules["model"] = FNO(model_config, data_config.max_output_dimension)
 
-    elif name == "vit":
-        modules["model"] = ViT(model_config, data_config.x_num, data_config.max_output_dimension)
+        case "vit":
+            modules["model"] = ViT(model_config, data_config.x_num, data_config.max_output_dimension)
 
-    elif name == "unet":
-        modules["model"] = UNet(model_config, data_config.max_output_dimension)
+        case "unet":
+            modules["model"] = UNet(model_config, data_config.max_output_dimension)
 
-    elif name == "deeponet":
-        modules["model"] = DeepONet(model_config, data_config, params.input_len)
+        case "deeponet":
+            modules["model"] = DeepONet(model_config, data_config, params.input_len)
 
-    else:
-        assert False, f"Model {name} hasn't been implemented"
+        case "prose_2to1":
+            modules["model"] = PROSE_2to1(model_config, symbol_env, data_config.x_num, data_config.max_output_dimension)
+
+        case "prose_1to1":
+            modules["model"] = PROSE_1to1(model_config, data_config.x_num, data_config.max_output_dimension)
+
+        case _:
+            assert False, f"Model {name} hasn't been implemented"
 
     if params.ema.enable and (params.is_master or (not params.eval_only)):
         logger.info(f"Using EMA for model parameters")
