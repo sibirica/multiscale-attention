@@ -11,5 +11,5 @@ scheduler_type: warmup_stable_decay
 # min_lr_ratio: 1e-4
 
 warmup: 0.05
-decay: 0.1
+decay: 0.5
 max_iters: ???

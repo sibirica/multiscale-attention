@@ -24,4 +24,6 @@ GPUs=0,1
 
 # CUDA_VISIBLE_DEVICES=$GPUs torchrun --standalone --nnodes 1 --nproc_per_node 2 main.py exp_name=fluids_test dryrun=1 batch_size=32 data=fno compile=1 optim=muon optim.scheduler_type=cosine optim.lr=1e-4 save_periodic=4 max_epoch=5 reload_model=checkpoint/fluids_test/bcat_muon_all_1/best-_l2_error.pth
 
-python main.py dryrun=1 batch_size=32 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1
+# python main.py dryrun=1 batch_size=32 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1
+
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py dryrun=1 batch_size=32 batch_size_eval=40 eval_size=50 data=arena compile=1 optim=muon model=bcat_next_token

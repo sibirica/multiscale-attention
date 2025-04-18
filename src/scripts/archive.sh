@@ -164,18 +164,38 @@ torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wand
 
 
 ## train bcat + muon on all fluid datasets
-expid=bcat_muon_all_1
+expid=bcat_muon_all_1 # main exp
 torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=fluids_test exp_id=${expid} batch_size=32 data=fluids_sample compile=1 optim=muon optim.decay=0.5 save_periodic=4 &&
 torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=fluids_eval eval_from_exp=checkpoint/fluids_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 &&
 python main.py eval_only=1 use_wandb=0 exp_name=save eval_from_exp=checkpoint/fluids_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=50 save_outputs=1 eval_size=1
 
-expid=bcat_muon_all_2
+expid=bcat_muon_all_2 # ablation qk norm
 torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=fluids_test exp_id=${expid} batch_size=32 data=fluids_sample compile=1 optim=muon optim.decay=0.5 save_periodic=4 model.qk_norm=0 &&
 torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=fluids_eval eval_from_exp=checkpoint/fluids_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model.qk_norm=0 &&
 
 expid=bcat_muon_all_4
 torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=fluids_test exp_id=${expid} batch_size=32 data=fluids_sample compile=1 optim=muon optim.scheduler_type=cosine save_periodic=16 model.qk_norm=0 &&
 torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=fluids_eval eval_from_exp=checkpoint/fluids_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model.qk_norm=0 &&
+
+expid=bcat_muon_all_5 # ablation swiglu
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=fluids_test exp_id=${expid} batch_size=32 data=fluids_sample compile=1 optim=muon model.activation=gelu model.dim_ffn=4096 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=fluids_eval eval_from_exp=checkpoint/fluids_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model.activation=gelu model.dim_ffn=4096 &&
+
+expid=bcat_muon_all_7 # compare time-then-space
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=fluids_test exp_id=${expid} batch_size=20 data=fluids_sample compile=1 optim=muon model=time_then_space &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=fluids_eval eval_from_exp=checkpoint/fluids_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=time_then_space
+
+expid=bcat_muon_all_8 # compare next token
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=fluids_test exp_id=${expid} batch_size=32 batch_size_eval=40 eval_size=50 data=arena compile=1 optim=muon model=bcat_next_token &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=fluids_eval eval_from_exp=checkpoint/fluids_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 data=arena model=bcat_next_token &&
+
+expid=bcat_muon_all_9 # compare next token
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=fluids_test exp_id=${expid} batch_size=40 batch_size_eval=40 eval_size=50 data=arena_u compile=1 optim=muon model=bcat_next_token &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=fluids_eval eval_from_exp=checkpoint/fluids_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 data=arena_u model=bcat_next_token &&
+
+expid=bcat_muon_all_10 # compare time-then-space 9 layers
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=fluids_test exp_id=${expid} batch_size=20 data=fluids_sample compile=1 optim=muon model=time_then_space model.n_layer=9 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=fluids_eval eval_from_exp=checkpoint/fluids_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=time_then_space model.n_layer=9 &&
 
 
 ## ft bcat on turbulence.
