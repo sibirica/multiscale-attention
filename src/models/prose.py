@@ -60,7 +60,7 @@ class PROSE_2to1(nn.Module):
         if mode == "fwd":
             return self.fwd(**kwargs)
         elif mode == "generate":
-            return self.fwd(**kwargs)
+            return self.generate(**kwargs)
         else:
             raise Exception(f"Unknown mode: {mode}")
 
@@ -76,6 +76,64 @@ class PROSE_2to1(nn.Module):
 
         Output:
             data_output:     Tensor     (bs, output_len, x_num, x_num, data_dim)
+        """
+
+        if self.config.get("carry_last_frame", 0):
+            last_frame = data_input[:, -1:].clone()  # (bs, 1, x_num, x_num, data_dim)
+
+        bs = data_input.size(0)
+
+        """
+        Step 1: Prepare data input (add time embeddings and patch position embeddings)
+            data_input (bs, input_len, x_num, x_num, data_dim) -> (bs, data_len, dim)
+                       data_len = input_len * patch_num * patch_num
+        """
+
+        data_input = self.embedder.encode(data_input, input_times)  # (bs, data_len, dim)
+
+        """
+        Step 2: Encode + Fusion
+            data_input:   Tensor     (bs, data_len, dim)
+            symbol_input: LongTensor (bs, symbol_len)
+        """
+
+        data_encoded = self.data_encoder(data_input)  # (bs, data_len, dim)
+
+        with sdpa_kernel(SDPBackend.CUDNN_ATTENTION):
+            symbol_encoded = self.symbol_encoder(
+                symbol_input, src_key_padding_mask=symbol_padding_mask
+            )  # (bs, symbol_len, dim)
+
+            fused, fused_mask = self.fusion(
+                x0=data_encoded,
+                x1=symbol_encoded,
+                key_padding_mask0=None,
+                key_padding_mask1=symbol_padding_mask,
+            )  # (bs, data_len+symbol_len, dim)
+
+            """
+            Step 3: Decode data
+            """
+
+            query_emb = self.data_decoder.get_query_emb(output_times)  # (bs/1, query_len, dim)
+            if query_emb.size(0) == 1:
+                query_emb = query_emb.expand(bs, -1, -1)
+
+            data_output = self.data_decoder(
+                src=fused, query_emb=query_emb, src_key_padding_mask=fused_mask
+            )  # (bs, query_len, dim)
+
+        data_output = self.embedder.decode(data_output)  # (bs, output_len, x_num, x_num, data_dim)
+
+        if self.config.get("carry_last_frame", 0):
+            data_output = data_output + last_frame
+
+        return data_output
+
+    @torch.compiler.disable()
+    def generate(self, data_input, input_times, output_times, symbol_input, symbol_padding_mask=None, **kwargs):
+        """
+        Copied from fwd() to fix torch recompilation issue during evaluation.
         """
 
         if self.config.get("carry_last_frame", 0):
@@ -161,7 +219,7 @@ class PROSE_1to1(nn.Module):
         if mode == "fwd":
             return self.fwd(**kwargs)
         elif mode == "generate":
-            return self.fwd(**kwargs)  # no difference during testing
+            return self.generate(**kwargs)  # no difference during testing
         else:
             raise Exception(f"Unknown mode: {mode}")
 
@@ -174,6 +232,45 @@ class PROSE_1to1(nn.Module):
 
         Output:
             data_output:     Tensor     (bs, output_len, x_num, x_num, data_dim)
+        """
+
+        bs = data_input.size(0)
+
+        """
+        Step 1: Prepare data input (add time embeddings and patch position embeddings)
+            data_input (bs, input_len, x_num, x_num, data_dim) -> (bs, data_len, dim)
+                       data_len = input_len * patch_num * patch_num
+        """
+
+        data_input = self.embedder.encode(data_input, input_times)  # (bs, data_len, dim)
+
+        """
+        Step 2: Encode
+            data_input:   Tensor     (bs, data_len, dim)
+        """
+        with sdpa_kernel(SDPBackend.CUDNN_ATTENTION):
+            data_encoded = self.data_encoder(data_input)  # (bs, data_len, dim)
+
+            """
+            Step 3: Decode data
+            """
+
+            query_emb = self.data_decoder.get_query_emb(output_times)  # (bs/1, query_len, dim)
+            if query_emb.size(0) == 1:
+                query_emb = query_emb.expand(bs, -1, -1)
+
+            data_output = self.data_decoder(
+                src=data_encoded, query_emb=query_emb, src_key_padding_mask=None
+            )  # (bs, query_len, dim)
+
+        data_output = self.embedder.decode(data_output)  # (bs, output_len, x_num, x_num, data_dim)
+
+        return data_output
+
+    @torch.compiler.disable()
+    def generate(self, data_input, input_times, output_times, **kwargs):
+        """
+        Copied from fwd() to fix torch recompilation issue during evaluation.
         """
 
         bs = data_input.size(0)
