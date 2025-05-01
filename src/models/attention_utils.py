@@ -105,7 +105,11 @@ class MultiheadAttention(nn.Module):
         #     q = rotary_emb(q)
         #     k = rotary_emb(k)
 
-        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)  # (bs, n_head, seq_len, head_dim)
+        # (bs, n_head, seq_len, head_dim)
+        # q = q.transpose(1, 2)
+        q = q.transpose(1, 2).contiguous()  # make torch.compile happy, striding error otherwise
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
 
         if rotary_emb is not None:
             q, k = rotary_emb.rotate_queries_with_cached_keys(q, k)
@@ -156,7 +160,8 @@ class MultiheadFlexAttention(MultiheadAttention):
 
     def __init__(self, embed_dim, num_heads, dropout=0.0, bias=True, qk_norm=False):
         super().__init__(embed_dim, num_heads, dropout, bias, qk_norm)
-        self.flex_sdpa = torch.compile(flex_attention, dynamic=False)
+        # self.flex_sdpa = torch.compile(flex_attention, dynamic=False)
+        self.flex_sdpa = torch.compile(flex_attention)
 
     def forward(
         self,
@@ -170,17 +175,6 @@ class MultiheadFlexAttention(MultiheadAttention):
         rotary_emb=None,
         cache=None,
     ):
-        if not self.training:
-            return super().forward(
-                query,
-                key,
-                value,
-                key_padding_mask=key_padding_mask,
-                attn_mask=attn_mask,
-                is_causal=is_causal,
-                rotary_emb=rotary_emb,
-                cache=cache,
-            )
 
         bs, seq_len, _ = query.size()
         k_len = key.size(1)
@@ -200,19 +194,22 @@ class MultiheadFlexAttention(MultiheadAttention):
             q = self.q_norm(q).to(dtype)
             k = self.k_norm(k).to(dtype)
 
-        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)  # (bs, n_head, seq_len, head_dim)
+        # (bs, n_head, seq_len, head_dim)
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
 
         if rotary_emb is not None:
             q, k = rotary_emb.rotate_queries_with_cached_keys(q, k)
 
-        output = self.spda(q, k, v, block_mask)  # (bs, n_heads, seq_len, head_dim)
+        if cache is not None:
+            k, v = cache.update(k, v)
+            k_len = k.size(2)
+
+        output = self.flex_sdpa(q, k, v, block_mask=block_mask)  # (bs, n_heads, seq_len, head_dim)
 
         output = output.transpose(1, 2).contiguous().view(bs, seq_len, -1)
         return self.out_proj(output)
-
-    @torch.compiler.disable()  # torch.compile + flex attention is buggy
-    def spda(self, q, k, v, block_mask):
-        return self.flex_sdpa(q, k, v, block_mask=block_mask)  # (bs, n_heads, seq_len, head_dim)
 
 
 class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):

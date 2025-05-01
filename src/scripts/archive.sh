@@ -229,6 +229,10 @@ expid=bcat_muon_all_19 # patch size 16
 torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=fluids_test exp_id=${expid} batch_size=64 data=fluids_sample compile=1 optim=muon model.patch_num=8 save_periodic=8 optim.scheduler_type=cosine max_epoch=20 &&
 torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=fluids_eval eval_from_exp=checkpoint/fluids_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model.patch_num=8 &&
 
+expid=bcat_muon_all_20 # main exp, 10% warmup, flex
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=fluids_test exp_id=${expid} batch_size=32 data=fluids_sample compile=1 optim=muon save_periodic=8 model.flex_attn=1 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=fluids_eval eval_from_exp=checkpoint/fluids_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model.flex_attn=1 &&
+
 
 ## ft bcat on turbulence.
 
