@@ -26,4 +26,7 @@ GPUs=0,1
 
 # python main.py dryrun=1 batch_size=32 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1
 
-torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py dryrun=1 batch_size=32 batch_size_eval=40 eval_size=50 data=arena compile=1 optim=muon model=bcat_next_token
+expid=bcat_muon_all_15 # patch size 16
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=fluids_test exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon optim.warmup=0.15 model.patch_num=8 save_periodic=8 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=fluids_eval eval_from_exp=checkpoint/fluids_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model.patch_num=8 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=fluids_eval eval_from_exp=checkpoint/fluids_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model.patch_num=8 overfit_test=1

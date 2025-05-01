@@ -25,8 +25,6 @@ np.seterr(divide="raise", under="ignore", over="raise", invalid="raise")
 
 torch._dynamo.config.optimize_ddp = False  # fix an issue when using DDP with torch.compile
 
-wandb.require("legacy-service")  # fix GPU logging issues
-
 
 @hydra.main(version_base=None, config_path="configs", config_name="main")
 def main(params: DictConfig):

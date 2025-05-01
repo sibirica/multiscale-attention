@@ -239,7 +239,8 @@ class Trainer(object):
         # check NaN
         if (loss != loss).data.any():
             logger.warning("NaN detected")
-            exit()
+            # exit()
+            raise ValueError("NaN detected")
 
         params = self.params
 
