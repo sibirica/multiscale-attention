@@ -125,6 +125,10 @@ def main(params: DictConfig):
 
     symbol_env = SymbolicEnvironment(params.symbol)
     modules = build_model(params, params.model, params.data, symbol_env)
+
+    if params.use_wandb and params.wandb.watch:
+        wandb.watch(modules["model"], log="all")
+
     if params.train_vq:
         trainer = VQTrainer(modules, params, symbol_env)
     else:
