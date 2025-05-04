@@ -820,61 +820,6 @@ def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
 
-def _get_seq_len(src: Tensor, batch_first: bool) -> Optional[int]:
-    if src.is_nested:
-        return None
-    else:
-        src_size = src.size()
-        if len(src_size) == 2:
-            # unbatched: S, E
-            return src_size[0]
-        else:
-            # batched: B, S, E if batch_first else S, B, E
-            seq_len_pos = 1 if batch_first else 0
-            return src_size[seq_len_pos]
-
-
-def _generate_square_subsequent_mask(
-    sz: int,
-    device: Optional[torch.device] = None,
-    dtype: Optional[torch.dtype] = None,
-) -> Tensor:
-    r"""Generate a square causal mask for the sequence.
-
-    The masked positions are filled with float('-inf'). Unmasked positions are filled with float(0.0).
-    """
-    if device is None:
-        device = torch.device("cpu")
-    if dtype is None:
-        dtype = torch.float32
-    return torch.triu(
-        torch.full((sz, sz), float("-inf"), dtype=dtype, device=device),
-        diagonal=1,
-    )
-
-
-def _detect_is_causal_mask(
-    mask: Optional[Tensor],
-    is_causal: Optional[bool] = None,
-    size: Optional[int] = None,
-) -> bool:
-    # Prevent type refinement
-    make_causal = is_causal is True
-
-    if is_causal is None and mask is not None:
-        sz = size if size is not None else mask.size(-2)
-        causal_comparison = _generate_square_subsequent_mask(sz, device=mask.device, dtype=mask.dtype)
-
-        # Do not use `torch.equal` so we handle batched masks by
-        # broadcasting the comparison.
-        if mask.size() == causal_comparison.size():
-            make_causal = bool((mask == causal_comparison).all())
-        else:
-            make_causal = False
-
-    return make_causal
-
-
 def Embedding(num_embeddings, embedding_dim, padding_idx=None):
     m = nn.Embedding(num_embeddings, embedding_dim, padding_idx=padding_idx)
     nn.init.normal_(m.weight, mean=0, std=embedding_dim**-0.5)
