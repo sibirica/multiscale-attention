@@ -58,9 +58,14 @@ class PROSE_2to1(nn.Module):
         ### Small hack to handle PyTorch distributed.
         """
         if mode == "fwd":
-            return self.fwd(**kwargs)
+            # return self.fwd(**kwargs)
+            with sdpa_kernel(SDPBackend.CUDNN_ATTENTION):
+                output = self.fwd(**kwargs)
+            return output
         elif mode == "generate":
             return self.generate(**kwargs)
+        elif mode == "rollout":
+            return self.rollout(**kwargs)
         else:
             raise Exception(f"Unknown mode: {mode}")
 
@@ -99,29 +104,28 @@ class PROSE_2to1(nn.Module):
 
         data_encoded = self.data_encoder(data_input)  # (bs, data_len, dim)
 
-        with sdpa_kernel(SDPBackend.CUDNN_ATTENTION):
-            symbol_encoded = self.symbol_encoder(
-                symbol_input, src_key_padding_mask=symbol_padding_mask
-            )  # (bs, symbol_len, dim)
+        symbol_encoded = self.symbol_encoder(
+            symbol_input, src_key_padding_mask=symbol_padding_mask
+        )  # (bs, symbol_len, dim)
 
-            fused, fused_mask = self.fusion(
-                x0=data_encoded,
-                x1=symbol_encoded,
-                key_padding_mask0=None,
-                key_padding_mask1=symbol_padding_mask,
-            )  # (bs, data_len+symbol_len, dim)
+        fused, fused_mask = self.fusion(
+            x0=data_encoded,
+            x1=symbol_encoded,
+            key_padding_mask0=None,
+            key_padding_mask1=symbol_padding_mask,
+        )  # (bs, data_len+symbol_len, dim)
 
-            """
-            Step 3: Decode data
-            """
+        """
+        Step 3: Decode data
+        """
 
-            query_emb = self.data_decoder.get_query_emb(output_times)  # (bs/1, query_len, dim)
-            if query_emb.size(0) == 1:
-                query_emb = query_emb.expand(bs, -1, -1)
+        query_emb = self.data_decoder.get_query_emb(output_times)  # (bs/1, query_len, dim)
+        if query_emb.size(0) == 1:
+            query_emb = query_emb.expand(bs, -1, -1)
 
-            data_output = self.data_decoder(
-                src=fused, query_emb=query_emb, src_key_padding_mask=fused_mask
-            )  # (bs, query_len, dim)
+        data_output = self.data_decoder(
+            src=fused, query_emb=query_emb, src_key_padding_mask=fused_mask
+        )  # (bs, query_len, dim)
 
         data_output = self.embedder.decode(data_output)  # (bs, output_len, x_num, x_num, data_dim)
 
@@ -157,29 +161,28 @@ class PROSE_2to1(nn.Module):
 
         data_encoded = self.data_encoder(data_input)  # (bs, data_len, dim)
 
-        with sdpa_kernel(SDPBackend.CUDNN_ATTENTION):
-            symbol_encoded = self.symbol_encoder(
-                symbol_input, src_key_padding_mask=symbol_padding_mask
-            )  # (bs, symbol_len, dim)
+        symbol_encoded = self.symbol_encoder(
+            symbol_input, src_key_padding_mask=symbol_padding_mask
+        )  # (bs, symbol_len, dim)
 
-            fused, fused_mask = self.fusion(
-                x0=data_encoded,
-                x1=symbol_encoded,
-                key_padding_mask0=None,
-                key_padding_mask1=symbol_padding_mask,
-            )  # (bs, data_len+symbol_len, dim)
+        fused, fused_mask = self.fusion(
+            x0=data_encoded,
+            x1=symbol_encoded,
+            key_padding_mask0=None,
+            key_padding_mask1=symbol_padding_mask,
+        )  # (bs, data_len+symbol_len, dim)
 
-            """
-            Step 3: Decode data
-            """
+        """
+        Step 3: Decode data
+        """
 
-            query_emb = self.data_decoder.get_query_emb(output_times)  # (bs/1, query_len, dim)
-            if query_emb.size(0) == 1:
-                query_emb = query_emb.expand(bs, -1, -1)
+        query_emb = self.data_decoder.get_query_emb(output_times)  # (bs/1, query_len, dim)
+        if query_emb.size(0) == 1:
+            query_emb = query_emb.expand(bs, -1, -1)
 
-            data_output = self.data_decoder(
-                src=fused, query_emb=query_emb, src_key_padding_mask=fused_mask
-            )  # (bs, query_len, dim)
+        data_output = self.data_decoder(
+            src=fused, query_emb=query_emb, src_key_padding_mask=fused_mask
+        )  # (bs, query_len, dim)
 
         data_output = self.embedder.decode(data_output)  # (bs, output_len, x_num, x_num, data_dim)
 
@@ -187,6 +190,77 @@ class PROSE_2to1(nn.Module):
             data_output = data_output + last_frame
 
         return data_output
+
+    @torch.compiler.disable()
+    def rollout(
+        self,
+        data_input,
+        input_times,
+        output_times,
+        symbol_input,
+        data_mask,
+        normalizer,
+        carry_over_c=-1,
+        symbol_padding_mask=None,
+        **kwargs,
+    ):
+        """
+        Inputs:
+            data_input:    Tensor     (bs, input_len=1, x_num, x_num, data_dim)
+            data_mask:     Tensor     (1, 1, 1, 1, data_dim)
+            carry_over_c:  int        Indicate channel that should be carried over,
+                                        not masked out or from output (e.g. boundary mask channel)
+
+        Output:
+            data_output:     Tensor     (bs, output_len, x_num, x_num, data_dim)
+        """
+        input_len = input_times.size(1)
+        t_num = input_len + output_times.size(1)
+        bs, _, x_num, _, data_dim = data_input.size()
+
+        data_all = torch.zeros(bs, t_num, x_num, x_num, data_dim, dtype=data_input.dtype, device=data_input.device)
+        data_all[:, :input_len] = data_input
+
+        # shared stuff
+
+        symbol_encoded = self.symbol_encoder(
+            symbol_input, src_key_padding_mask=symbol_padding_mask
+        )  # (bs, symbol_len, dim)
+
+        query_emb = self.data_decoder.get_query_emb(output_times[:, :1])  # (bs/1, query_len, dim)
+        if query_emb.size(0) == 1:
+            query_emb = query_emb.expand(bs, -1, -1)
+
+        # actual rollout
+
+        for i in range(input_len, t_num):
+            cur_data_input = data_all[:, i - input_len : i]  # (bs, 1, x_num, x_num, data_dim)
+            cur_data_input, _, mean, std = normalizer(cur_data_input)
+
+            cur_data_input = self.embedder.encode(cur_data_input, input_times)  # (bs, data_len, dim)
+
+            cur_data_encoded = self.data_encoder(cur_data_input)  # (bs, data_len, dim)
+            fused, fused_mask = self.fusion(
+                x0=cur_data_encoded,
+                x1=symbol_encoded,
+                key_padding_mask0=None,
+                key_padding_mask1=symbol_padding_mask,
+            )  # (bs, data_len+symbol_len, dim)
+
+            new_output = self.data_decoder(
+                src=fused, query_emb=query_emb, src_key_padding_mask=fused_mask
+            )  # (bs, query_len, dim)
+            new_output = self.embedder.decode(new_output)  # (bs, output_len, x_num, x_num, data_dim)
+
+            new_output = new_output * data_mask  # (bs, 1, x_num, x_num, data_dim)
+            new_output = new_output * std + mean
+
+            if carry_over_c >= 0:
+                new_output[:, 0, :, :, carry_over_c] = data_all[:, 0, :, :, carry_over_c]
+
+            data_all[:, i : i + 1] = new_output
+
+        return data_all[:, input_len:]
 
 
 class PROSE_1to1(nn.Module):
@@ -217,7 +291,10 @@ class PROSE_1to1(nn.Module):
         ### Small hack to handle PyTorch distributed.
         """
         if mode == "fwd":
-            return self.fwd(**kwargs)
+            # return self.fwd(**kwargs)
+            with sdpa_kernel(SDPBackend.CUDNN_ATTENTION):
+                output = self.fwd(**kwargs)
+            return output
         elif mode == "generate":
             return self.generate(**kwargs)  # no difference during testing
         else:
@@ -248,20 +325,19 @@ class PROSE_1to1(nn.Module):
         Step 2: Encode
             data_input:   Tensor     (bs, data_len, dim)
         """
-        with sdpa_kernel(SDPBackend.CUDNN_ATTENTION):
-            data_encoded = self.data_encoder(data_input)  # (bs, data_len, dim)
+        data_encoded = self.data_encoder(data_input)  # (bs, data_len, dim)
 
-            """
-            Step 3: Decode data
-            """
+        """
+        Step 3: Decode data
+        """
 
-            query_emb = self.data_decoder.get_query_emb(output_times)  # (bs/1, query_len, dim)
-            if query_emb.size(0) == 1:
-                query_emb = query_emb.expand(bs, -1, -1)
+        query_emb = self.data_decoder.get_query_emb(output_times)  # (bs/1, query_len, dim)
+        if query_emb.size(0) == 1:
+            query_emb = query_emb.expand(bs, -1, -1)
 
-            data_output = self.data_decoder(
-                src=data_encoded, query_emb=query_emb, src_key_padding_mask=None
-            )  # (bs, query_len, dim)
+        data_output = self.data_decoder(
+            src=data_encoded, query_emb=query_emb, src_key_padding_mask=None
+        )  # (bs, query_len, dim)
 
         data_output = self.embedder.decode(data_output)  # (bs, output_len, x_num, x_num, data_dim)
 
@@ -287,20 +363,19 @@ class PROSE_1to1(nn.Module):
         Step 2: Encode
             data_input:   Tensor     (bs, data_len, dim)
         """
-        with sdpa_kernel(SDPBackend.CUDNN_ATTENTION):
-            data_encoded = self.data_encoder(data_input)  # (bs, data_len, dim)
+        data_encoded = self.data_encoder(data_input)  # (bs, data_len, dim)
 
-            """
-            Step 3: Decode data
-            """
+        """
+        Step 3: Decode data
+        """
 
-            query_emb = self.data_decoder.get_query_emb(output_times)  # (bs/1, query_len, dim)
-            if query_emb.size(0) == 1:
-                query_emb = query_emb.expand(bs, -1, -1)
+        query_emb = self.data_decoder.get_query_emb(output_times)  # (bs/1, query_len, dim)
+        if query_emb.size(0) == 1:
+            query_emb = query_emb.expand(bs, -1, -1)
 
-            data_output = self.data_decoder(
-                src=data_encoded, query_emb=query_emb, src_key_padding_mask=None
-            )  # (bs, query_len, dim)
+        data_output = self.data_decoder(
+            src=data_encoded, query_emb=query_emb, src_key_padding_mask=None
+        )  # (bs, query_len, dim)
 
         data_output = self.embedder.decode(data_output)  # (bs, output_len, x_num, x_num, data_dim)
 

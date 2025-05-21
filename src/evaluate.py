@@ -150,7 +150,7 @@ class Evaluator(object):
                     if "times" in model_input:
                         model_input["times"] = model_input["times"][:, :14]
 
-                if type in ["cfdbench"] and self.params.model.name.endswith("auto"):
+                if type in ["cfdbench"] and (self.params.model.name.endswith("auto") or self.params.rollout):
                     # NOTE: currently hardcoded
                     model_input["carry_over_c"] = 2
 

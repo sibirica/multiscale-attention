@@ -265,10 +265,10 @@ class BCAT(nn.Module):
         data_all[:, :input_len] = data_input
 
         for i in range(input_len, t_num):
-            cur_data_input = data_all[:, i - 1 : i]  # (bs, 1, x_num, x_num, data_dim)
+            cur_data_input = data_all[:, i - input_len : i]  # (bs, 1, x_num, x_num, data_dim)
             cur_data_input, _, mean, std = normalizer(cur_data_input)
 
-            cur_data_input = self.embedder.encode(cur_data_input, times[:, :1])  # (bs, data_len, dim)
+            cur_data_input = self.embedder.encode(cur_data_input, times[:, :input_len])  # (bs, data_len, dim)
 
             mask = None
             cur_data_encoded = self.transformer(cur_data_input, mask)  # (bs, data_len, dim)

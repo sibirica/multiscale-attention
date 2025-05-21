@@ -306,6 +306,67 @@ expid=prose_9 # muon, prose, qk norm, more warmup
 torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.decay=0.4 save_periodic=8 reload_checkpoint=checkpoint/prose_fd/prose_8/periodic-31.pth optim.weight_decay=5e-4 &&
 torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1
 
-expid=prose_10 # muon, prose, qk norm, more warmup
+expid=prose_10 # muon, prose, qk norm, more warmup, smaller lr
 torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.decay=0.5 save_periodic=8 optim.lr=7e-4 &&
 torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1
+
+expid=prose_11 # muon, prose, qk norm
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 save_periodic=8 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1
+
+expid=prose_12 # smaller lr, noise
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.decay=0.5 save_periodic=8 optim.lr=7e-4 noise=1e-4 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1
+
+expid=prose_13 # smaller lr, noise
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.decay=0.5 save_periodic=8 optim.lr=7e-4 noise=5e-3 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1
+
+expid=prose_14 # smaller lr, noise
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.decay=0.5 save_periodic=8 optim.lr=7e-4 noise=0.02 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1
+
+expid=prose_15 # smaller lr, flip
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.decay=0.5 save_periodic=8 optim.lr=7e-4 flip=1 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1
+
+expid=prose_16 # 1to1
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_1to1 model.qk_norm=1 save_periodic=8 optim.lr=7e-4 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_1to1 model.qk_norm=1
+
+expid=prose_17 # 1to1
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_1to1 model.qk_norm=1 save_periodic=8 optim.lr=7e-4 model.data_encoder.n_layer=10 model.data_decoder.n_layer=8 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_1to1 model.qk_norm=1 model.data_encoder.n_layer=10 model.data_decoder.n_layer=8
+
+expid=prose_18 # 2to1, more encoder
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.lr=7e-4 model.data_encoder.n_layer=6 model.fusion.n_layer=6 model.data_decoder.n_layer=6 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1 model.data_encoder.n_layer=6 model.fusion.n_layer=6 model.data_decoder.n_layer=6
+
+expid=prose_19 # muon, prose, qk norm
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.lr=7e-4 model.data_encoder.n_layer=6 model.fusion.n_layer=8 model.data_decoder.n_layer=4 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1 model.data_encoder.n_layer=6 model.fusion.n_layer=8 model.data_decoder.n_layer=4
+
+expid=prose_20 # muon, prose, qk norm
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.lr=7e-4 model.data_encoder.n_layer=4 model.fusion.n_layer=10 model.data_decoder.n_layer=4 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1 model.data_encoder.n_layer=4 model.fusion.n_layer=10 model.data_decoder.n_layer=4
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid}_rollout batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1 model.data_encoder.n_layer=4 model.fusion.n_layer=10 model.data_decoder.n_layer=4 rollout=1
+
+expid=prose_21 # muon, prose, qk norm
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.lr=7e-4 model.data_encoder.n_layer=2 model.fusion.n_layer=12 model.data_decoder.n_layer=4 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1 model.data_encoder.n_layer=2 model.fusion.n_layer=12 model.data_decoder.n_layer=4
+
+expid=prose_22 # muon, prose, qk norm
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.lr=7e-4 model.data_encoder.n_layer=2 model.fusion.n_layer=10 model.data_decoder.n_layer=6 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1 model.data_encoder.n_layer=2 model.fusion.n_layer=10 model.data_decoder.n_layer=6
+
+expid=prose_23 # muon, prose, qk norm
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.lr=7e-4 model.data_encoder.n_layer=4 model.fusion.n_layer=12 model.data_decoder.n_layer=2 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1 model.data_encoder.n_layer=4 model.fusion.n_layer=12 model.data_decoder.n_layer=2
+
+expid=prose_24 # 1to1
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_1to1 model.qk_norm=1 save_periodic=8 optim.lr=7e-4 model.data_encoder.n_layer=6 model.data_decoder.n_layer=12 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_1to1 model.qk_norm=1 model.data_encoder.n_layer=6 model.data_decoder.n_layer=12
+
+expid=prose_25 # rollout
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_name=prose_fd exp_id=${expid} batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.lr=7e-4 model.data_encoder.n_layer=4 model.fusion.n_layer=10 model.data_decoder.n_layer=4 data.t_num=11 &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=prose_fd_eval eval_from_exp=checkpoint/prose_fd/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model=prose_2to1 model.qk_norm=1 symbol.symbol_input=1 model.data_encoder.n_layer=4 model.fusion.n_layer=10 model.data_decoder.n_layer=4 rollout=1

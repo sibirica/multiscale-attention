@@ -606,6 +606,7 @@ class Trainer(object):
             model_input["input_times"] = to_cuda(input_times)
             model_input["output_times"] = to_cuda(output_times)
             model_input["data_input"] = data_input
+            model_input["data_mask"] = data_mask
 
         d = {
             "data_label": data_label,
