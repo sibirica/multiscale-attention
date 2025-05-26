@@ -78,6 +78,7 @@ class BCAT(nn.Module):
             "rotary": config.rotary,
             "qk_norm": config.get("qk_norm", False),
             "flex_attn": self.flex_attn,
+            "bias": config.get("bias", True),
         }
 
         if config.kv_cache:

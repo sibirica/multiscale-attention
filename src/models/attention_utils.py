@@ -29,19 +29,19 @@ N_MAX_POSITIONS = 1024  # maximum input sequence length
 
 
 class FFN(nn.Module):
-    def __init__(self, dim, hidden_dim, act="gelu", dropout=0):
+    def __init__(self, dim, hidden_dim, act="gelu", dropout=0, bias=True):
         super().__init__()
 
-        self.fc1 = nn.Linear(dim, hidden_dim)
+        self.fc1 = nn.Linear(dim, hidden_dim, bias)
 
         if act.endswith("glu"):
-            self.fc_gate = nn.Linear(dim, hidden_dim)
+            self.fc_gate = nn.Linear(dim, hidden_dim, bias)
         else:
             self.fc_gate = None
 
         self.activation = get_activation(act)()
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
-        self.fc2 = nn.Linear(hidden_dim, dim)
+        self.fc2 = nn.Linear(hidden_dim, dim, bias)
 
     def forward(self, x):
         if self.fc_gate is None:
@@ -67,10 +67,11 @@ class MultiheadAttention(nn.Module):
 
         self.qk_norm = qk_norm
         if qk_norm:
-            # self.q_norm = nn.RMSNorm(self.head_dim, eps=1e-5)
-            # self.k_norm = nn.RMSNorm(self.head_dim, eps=1e-5)
-            self.q_norm = nn.LayerNorm(self.head_dim, eps=1e-5)
-            self.k_norm = nn.LayerNorm(self.head_dim, eps=1e-5)
+            # norm = nn.RMSNorm
+            norm = nn.LayerNorm
+
+            self.q_norm = norm(self.head_dim, eps=1e-5)
+            self.k_norm = norm(self.head_dim, eps=1e-5)
 
     def forward(
         self,
@@ -245,7 +246,7 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
             self.self_attn = MultiheadAttention(d_model, nhead, dropout=attn_dropout, bias=bias, qk_norm=qk_norm)
         self.rotary = rotary
 
-        self.ffn = FFN(d_model, dim_feedforward, activation, dropout)
+        self.ffn = FFN(d_model, dim_feedforward, activation, dropout, bias)
 
         self.norm_first = norm_first
 

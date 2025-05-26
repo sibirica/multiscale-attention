@@ -23,8 +23,6 @@ torch.multiprocessing.set_sharing_strategy("file_system")
 # np.seterr(all="raise")
 np.seterr(divide="raise", under="ignore", over="raise", invalid="raise")
 
-torch._dynamo.config.optimize_ddp = False  # fix an issue when using DDP with torch.compile
-
 
 @hydra.main(version_base=None, config_path="configs", config_name="main")
 def main(params: DictConfig):

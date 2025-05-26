@@ -16,4 +16,7 @@ GPUs=0,1
 
 # CUDA_VISIBLE_DEVICES=1 python main.py dryrun=1 batch_size=8 data=arena compile=1 optim=muon model.patch_num=8
 
-torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py dryrun=1 batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.decay=0.4 save_periodic=8
+# torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py dryrun=1 batch_size=40 data=fluids_sample compile=1 optim=muon model=prose_2to1 symbol.symbol_input=1 model.qk_norm=1 optim.decay=0.4 save_periodic=8
+
+expid=bcat_muon_all_11 # main exp, 10% warmup
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=debug eval_from_exp=checkpoint/fluids_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64
