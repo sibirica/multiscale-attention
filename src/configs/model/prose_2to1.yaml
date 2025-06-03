@@ -7,7 +7,7 @@ dropout: 0
 attn_dropout: 0
 n_head: 8
 norm_first: true
-qk_norm: 0
+qk_norm: 1
 norm: rms # select from [layer, rms]
 activation: gelu
 rotary: 0
@@ -38,7 +38,7 @@ embedder:
 
 
 data_encoder:
-    n_layer: 2
+    n_layer: 4
     positional_embedding: null
 
     dim_emb: ${..dim_emb}
@@ -70,7 +70,7 @@ symbol_encoder:
     flex_attn: ${..flex_attn}
     
 fusion:
-    n_layer: 8
+    n_layer: 10
     type_embeddings: true
 
     dim_emb: ${..dim_emb}
@@ -86,7 +86,7 @@ fusion:
     flex_attn: ${..flex_attn}
     
 data_decoder:
-    n_layer: 8
+    n_layer: 4
     query_dim: 1 # time: 1, space: 2
     self_attn: 0 # 0: disable, 1: restricted self_attn, 2: full self_attn
     time_embed: ${..time_embed}
