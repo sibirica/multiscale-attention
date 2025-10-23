@@ -18,7 +18,7 @@ Alternatively, to manually install:
 conda create -n bcat python=3.11 ipython
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 # or preferred version
 pip install numpy sympy jupyter pandas matplotlib seaborn omegaconf h5py scikit-learn scipy tabulate hydra-core tqdm wandb einops
-pip install torchao torchtune torchdata==0.7.1 torchinfo torchmetrics rotary-embedding-torch dadaptation transformers accelerate diffusers["torch"] torch-harmonics==0.6.5 neuraloperator
+pip install torchdata==0.7.1 torchinfo torchmetrics rotary-embedding-torch dadaptation transformers accelerate diffusers["torch"] torch-harmonics neuraloperator ema-pytorch
 ```
 
 ## Run the model
