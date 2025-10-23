@@ -1,17 +1,15 @@
 defaults:
-  - data: fluids
+  - data: arena
   - model: bcat
-  - optim: adamw
+  - optim: muon
   - _self_
   - override hydra/hydra_logging: none
   - override hydra/job_logging: none
 
-  
 ### Debug
 
 debug: 0
 dryrun: 0
-
 
 ### data
 
@@ -27,7 +25,6 @@ noise_type: additive # Type of noise (select from [additive, multiplicative])
 
 flip: 0 # randomly flip the data in space dimensions
 rotate: 0 # right angle rotations in space dimensions
-
 
 ### Training / Evaluation
 
@@ -108,7 +105,7 @@ symbol:
   max_output_dimension: 5
 
 ### experiment & logging names
-exp_name: ts
+exp_name: bcat
 exp_id: null
 
 use_wandb: 1
