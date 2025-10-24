@@ -74,7 +74,6 @@ class Muon(torch.optim.Optimizer):
         adamw_betas=(0.9, 0.95),
         adamw_eps=1e-8,
     ):
-
         defaults = dict(
             lr=lr,
             wd=wd,
@@ -119,7 +118,6 @@ class Muon(torch.optim.Optimizer):
                 loss = closure()
 
         for group in self.param_groups:
-
             ############################
             #           Muon           #
             ############################

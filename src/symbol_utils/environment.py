@@ -25,7 +25,6 @@ SKIP_ITEM = "SKIP_ITEM"
 
 
 class SymbolicEnvironment:
-
     def __init__(self, params):
         if not params.symbol_input:
             self.pad_index = -100

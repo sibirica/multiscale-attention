@@ -513,7 +513,6 @@ class ComNS2D(myIterDp):
             data_paths = self.rng.permutation(data_paths)
 
         for data_path in data_paths:
-
             with h5py.File(data_path, "r") as hf:
                 iter_range = self.get_iter_range(len(hf["Vx"]))[self.local_rank :: self.n_gpu_per_node]
                 if self.train:
@@ -775,7 +774,6 @@ class IncomNS2DArenaU(myIterDp):
             iter_range = self.rng.permutation(iter_range)
 
         for file_idx in iter_range:
-
             data_path = os.path.join(self.folder, self.data_files[file_idx])
             with h5py.File(data_path, "r") as f:
                 hf = f[self.split_to_name[self.split]]

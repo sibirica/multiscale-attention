@@ -1,5 +1,5 @@
 """
-Process CFDBench data. 
+Process CFDBench data.
 Source: https://github.com/HaoZhongkai/DPOT
 """
 

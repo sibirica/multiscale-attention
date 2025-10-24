@@ -35,7 +35,6 @@ def get_dataset(params, symbol_env, split):
         else:
             return dp.iter.SampleMultiplexer(datasets)
     else:
-
         datasets = {}
         for t in types:
             use_split = "train" if params.overfit_test else split

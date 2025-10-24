@@ -62,9 +62,9 @@ class LinearEmbedder(nn.Module):
         self.data_dim = data_dim
         act = get_activation("gelu")
 
-        assert (
-            x_num % config.patch_num == 0
-        ), f"x_num must be divisible by patch_num, x_num: {x_num}, patch_num: {config.patch_num}"
+        assert x_num % config.patch_num == 0, (
+            f"x_num must be divisible by patch_num, x_num: {x_num}, patch_num: {config.patch_num}"
+        )
         self.patch_resolution = x_num // config.patch_num  # resolution of one space dimension for each patch
         self.patch_dim = data_dim * self.patch_resolution * self.patch_resolution  # dimension per patch
 
@@ -136,15 +136,15 @@ class ConvEmbedder(nn.Module):
         self.data_dim = data_dim
         act = get_activation("gelu")
 
-        assert (
-            x_num % config.patch_num == 0
-        ), f"x_num must be divisible by patch_num, x_num: {x_num}, patch_num: {config.patch_num}"
+        assert x_num % config.patch_num == 0, (
+            f"x_num must be divisible by patch_num, x_num: {x_num}, patch_num: {config.patch_num}"
+        )
         self.patch_resolution = x_num // config.patch_num  # resolution of one space dimension for each patch
         self.patch_dim = data_dim * self.patch_resolution * self.patch_resolution  # dimension per patch
 
-        assert (
-            x_num % config.patch_num_output == 0
-        ), f"x_num must be divisible by patch_num_output, x_num: {x_num}, patch_num_output: {config.patch_num_output}"
+        assert x_num % config.patch_num_output == 0, (
+            f"x_num must be divisible by patch_num_output, x_num: {x_num}, patch_num_output: {config.patch_num_output}"
+        )
         self.patch_resolution_output = (
             x_num // config.patch_num_output
         )  # resolution of one space dimension for each patch in output
@@ -300,15 +300,15 @@ class PatchEmbedder(nn.Module):
         self.data_dim = data_dim
         act = get_activation("gelu")
 
-        assert (
-            x_num % config.patch_num == 0
-        ), f"x_num must be divisible by patch_num, x_num: {x_num}, patch_num: {config.patch_num}"
+        assert x_num % config.patch_num == 0, (
+            f"x_num must be divisible by patch_num, x_num: {x_num}, patch_num: {config.patch_num}"
+        )
         self.patch_resolution = x_num // config.patch_num  # resolution of one space dimension for each patch
         self.patch_dim = data_dim * self.patch_resolution * self.patch_resolution  # dimension per patch
 
-        assert (
-            x_num % config.patch_num_output == 0
-        ), f"x_num must be divisible by patch_num_output, x_num: {x_num}, patch_num_output: {config.patch_num_output}"
+        assert x_num % config.patch_num_output == 0, (
+            f"x_num must be divisible by patch_num_output, x_num: {x_num}, patch_num_output: {config.patch_num_output}"
+        )
         self.patch_resolution_output = (
             x_num // config.patch_num_output
         )  # resolution of one space dimension for each patch in output
@@ -661,15 +661,15 @@ class ConvRegEmbedder(nn.Module):
         self.data_dim = data_dim
         act = get_activation("gelu")
 
-        assert (
-            x_num % config.patch_num == 0
-        ), f"x_num must be divisible by patch_num, x_num: {x_num}, patch_num: {config.patch_num}"
+        assert x_num % config.patch_num == 0, (
+            f"x_num must be divisible by patch_num, x_num: {x_num}, patch_num: {config.patch_num}"
+        )
         self.patch_resolution = x_num // config.patch_num  # resolution of one space dimension for each patch
         self.patch_dim = data_dim * self.patch_resolution * self.patch_resolution  # dimension per patch
 
-        assert (
-            x_num % config.patch_num_output == 0
-        ), f"x_num must be divisible by patch_num_output, x_num: {x_num}, patch_num_output: {config.patch_num_output}"
+        assert x_num % config.patch_num_output == 0, (
+            f"x_num must be divisible by patch_num_output, x_num: {x_num}, patch_num_output: {config.patch_num_output}"
+        )
         self.patch_resolution_output = (
             x_num // config.patch_num_output
         )  # resolution of one space dimension for each patch in output

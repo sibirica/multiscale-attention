@@ -333,7 +333,7 @@ def get_tube_auto_datasets(
     dev_case_dirs = case_dirs[num_train : num_train + num_dev]
     test_case_dirs = case_dirs[num_train + num_dev :]
     print("==== Number of cases in different splits ====")
-    print(f"train: {len(train_case_dirs)}, " f"dev: {len(dev_case_dirs)}, " f"test: {len(test_case_dirs)}")
+    print(f"train: {len(train_case_dirs)}, dev: {len(dev_case_dirs)}, test: {len(test_case_dirs)}")
     print("=============================================")
     kwargs: dict[str, Any] = dict(
         delta_time=delta_time,

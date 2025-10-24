@@ -50,7 +50,6 @@ class FFN(nn.Module):
 
 
 class MultiheadAttention(nn.Module):
-
     def __init__(self, embed_dim, num_heads, dropout=0.0, bias=True, qk_norm=False):
         super().__init__()
         self.embed_dim = embed_dim
@@ -157,7 +156,6 @@ class MultiheadAttention(nn.Module):
 
 
 class MultiheadFlexAttention(MultiheadAttention):
-
     def __init__(self, embed_dim, num_heads, dropout=0.0, bias=True, qk_norm=False):
         super().__init__(embed_dim, num_heads, dropout, bias, qk_norm)
         # self.flex_sdpa = torch.compile(flex_attention, dynamic=False)
@@ -175,7 +173,6 @@ class MultiheadFlexAttention(MultiheadAttention):
         rotary_emb=None,
         cache=None,
     ):
-
         bs, seq_len, _ = query.size()
         k_len = key.size(1)
 
@@ -396,7 +393,6 @@ class CacheCustomTransformerEncoderLayer(CustomTransformerEncoderLayer):
         cache=None,
     ):
         if self.training:
-
             return super().forward(
                 src=src,
                 src_mask=src_mask,
@@ -513,7 +509,6 @@ class CacheCustomTransformerEncoder(CustomTransformerEncoder):
 
 
 class CustomTransformerDecoder(nn.Module):
-
     def __init__(
         self,
         decoder_layer,
@@ -627,7 +622,6 @@ class OperatorDecoderLayer(nn.Module):
         memory_is_causal: bool = False,
         rotary_emb=None,
     ) -> Tensor:
-
         x = tgt
         if self.norm_first:
             x = x + self._mha_block(
@@ -706,7 +700,6 @@ class SinusoidalPE(nn.Module):
 
 
 class LearnablePE(nn.Module):
-
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = N_MAX_POSITIONS):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)

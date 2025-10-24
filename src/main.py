@@ -26,7 +26,6 @@ np.seterr(divide="raise", under="ignore", over="raise", invalid="raise")
 
 @hydra.main(version_base=None, config_path="configs", config_name="main")
 def main(params: DictConfig):
-
     if params.dryrun:
         print("Debugging run...")
         params.max_epoch = 1
@@ -136,7 +135,6 @@ def main(params: DictConfig):
     evaluator = Evaluator(trainer, symbol_env)
 
     if params.eval_only:
-
         stats, _ = evaluator.evaluate()
 
         s = "Eval | data loss = {:.6f}".format(stats["data_loss"])

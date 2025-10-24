@@ -117,7 +117,6 @@ class FNO(nn.Module):
 
 
 class UNet(nn.Module):
-
     def __init__(self, config, max_output_dim):
         super().__init__()
         self.config = config
@@ -337,7 +336,6 @@ class branch(nn.Module):
         self.set_lay = nn.ModuleList([OneInputBasis(self.num_sensors, self.dim1) for _ in range(self.basis_dim)])
 
     def forward(self, v):
-
         w = self.set_lay[0](v)
 
         for ii in range(self.basis_dim - 1):
@@ -416,7 +414,6 @@ class DeepONet(nn.Module):
             raise Exception(f"Unknown mode: {mode}")
 
     def fwd(self, data_input, output_times, **kwargs):
-
         meshgrid = self.meshgrid
         bs = data_input.shape[0]
         data = patchify(data_input, self.patch_num)  # (bs, input_len, p*p, x*y*d)

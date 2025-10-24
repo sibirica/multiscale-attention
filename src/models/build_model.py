@@ -16,7 +16,6 @@ logger = getLogger()
 
 
 def build_model(params, model_config, data_config, symbol_env):
-
     modules = {}
 
     # get model

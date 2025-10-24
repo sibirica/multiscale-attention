@@ -42,11 +42,12 @@ class CfdDataset(Dataset):
 
 
 class CfdAutoDataset(Dataset):
-    '''
+    """
     Base class for auto-regressive dataset.
-    '''
+    """
+
     def __getitem__(self, index: int) -> Tuple[Tensor, Tensor, Tensor]:
-        '''Should return a tuple of (input, labels, mask)'''
+        """Should return a tuple of (input, labels, mask)"""
         raise NotImplementedError
 
     def __len__(self) -> int:

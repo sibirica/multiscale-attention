@@ -51,7 +51,6 @@ def get_boundary_mask(patch_size: int, patch_num: int, boundary_width=1):
 
 
 class Evaluator(object):
-
     def __init__(self, trainer, symbol_env):
         self.trainer = trainer
         self.modules = trainer.modules
@@ -102,7 +101,6 @@ class Evaluator(object):
 
     @torch.inference_mode()
     def evaluate(self):
-
         params = self.params
 
         model = self.modules["model"]
@@ -314,7 +312,6 @@ class Evaluator(object):
             # sync results on all gpus
             sorted_keys = None
             for type, results in all_results.items():
-
                 if sorted_keys is None:
                     sorted_keys = sorted(results.keys())
 

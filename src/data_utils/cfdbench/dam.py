@@ -27,6 +27,7 @@ case_params = {
   "dy": 0.00625
 }
 """
+
 from pathlib import Path
 from typing import Tuple, List, Dict, Any
 import random
@@ -174,9 +175,7 @@ class DamFlowDataset(CfdDataset):
         self.case_ids = torch.tensor(case_ids)
 
         # get the no. frames up until this case (inclusive), used for evaluation.
-        self.num_frames_before: List[int] = [
-            sum(self.num_frames[: i + 1]) for i in range(len(self.num_frames))
-        ]
+        self.num_frames_before: List[int] = [sum(self.num_frames[: i + 1]) for i in range(len(self.num_frames))]
 
     def idx_to_case_id_and_frame_idx(self, idx: int) -> Tuple[int, int]:
         """
@@ -294,9 +293,7 @@ class DamFlowAutoDataset(CfdAutoDataset):
         label = self.labels[idx]  # (1, h, w)
         case_id = self.case_ids[idx]
         case_params = self.case_params[case_id]
-        case_params = {
-            k: torch.tensor(v, dtype=torch.float32) for k, v in case_params.items()
-        }
+        case_params = {k: torch.tensor(v, dtype=torch.float32) for k, v in case_params.items()}
         return inputs, label, case_params
 
     def __len__(self):
@@ -317,9 +314,7 @@ def get_dam_datasets(
     for name in ["prop", "bc", "geo"]:
         if name in case_name:
             case_dir = data_dir / name
-            this_case_dirs = sorted(
-                case_dir.glob("case*"), key=lambda x: int(x.name[4:])
-            )
+            this_case_dirs = sorted(case_dir.glob("case*"), key=lambda x: int(x.name[4:]))
             case_dirs += this_case_dirs
     assert len(case_dirs) > 0
     random.seed(seed)
@@ -351,9 +346,7 @@ def get_dam_auto_datasets(
     for name in ["prop", "bc", "geo"]:
         if name in subset_name:
             case_dir = data_dir / name
-            this_case_dirs = sorted(
-                case_dir.glob("case*"), key=lambda x: int(x.name[4:])
-            )
+            this_case_dirs = sorted(case_dir.glob("case*"), key=lambda x: int(x.name[4:]))
             case_dirs += this_case_dirs
 
     assert case_dirs
@@ -369,11 +362,7 @@ def get_dam_auto_datasets(
     dev_case_dirs = case_dirs[num_train : num_train + num_dev]
     test_case_dirs = case_dirs[num_train + num_dev :]
     print("==== Number of cases in different splits ====")
-    print(
-        f"train: {len(train_case_dirs)}, "
-        f"dev: {len(dev_case_dirs)}, "
-        f"test: {len(test_case_dirs)}"
-    )
+    print(f"train: {len(train_case_dirs)}, dev: {len(dev_case_dirs)}, test: {len(test_case_dirs)}")
     print("=============================================")
     kwargs: dict[str, Any] = dict(
         delta_time=delta_time,

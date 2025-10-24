@@ -27,16 +27,13 @@ def convert(folder, save_folder):
                         data = np.array(f[k])
                         data = data.reshape(
                             data.shape[0], data.shape[1], data.shape[2] // 4, 4, data.shape[3] // 4, 4
-                        ).mean(
-                            axis=(-3, -1)
-                        )  # (size, nt, nx/4, ny/4)
+                        ).mean(axis=(-3, -1))  # (size, nt, nx/4, ny/4)
                         g.create_dataset(k, data=data)
 
         print(f"Converted source ({path}) into target ({target_path})\n\n")
 
 
 if __name__ == "__main__":
-
     folder = "/data/shared/dataset/pdebench/2D/CFD/2D_Train_Rand/raw_512"
     save_folder = "/data/shared/dataset/pdebench/2D/CFD/2D_Train_Rand"
     convert(folder, save_folder)

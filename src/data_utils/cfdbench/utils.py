@@ -14,9 +14,7 @@ def normalize_physics_props(case_params: Dict[str, float]):
     viscosity_mean = 0.00238
     viscosity_std = 0.005
     case_params["density"] = (case_params["density"] - density_mean) / density_std
-    case_params["viscosity"] = (
-        case_params["viscosity"] - viscosity_mean
-    ) / viscosity_std
+    case_params["viscosity"] = (case_params["viscosity"] - viscosity_mean) / viscosity_std
 
 
 def normalize_bc(case_params: Dict[str, float], key: str):
@@ -36,13 +34,13 @@ def plot_contour(points):
 
 
 def dump_json(data, path):
-    with open(path, "w", encoding='utf8') as f:
+    with open(path, "w", encoding="utf8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
 def load_json(path):
     """Load a JSON object from a file"""
-    with open(path, 'r', encoding='utf8') as f:
+    with open(path, "r", encoding="utf8") as f:
         return json.load(f)
 
 
