@@ -6,19 +6,9 @@ The code is based on the repository [PROSE](https://github.com/felix-lyx/prose).
 
 ## Install dependencies
 
-Using conda and the ```env.yml``` file:
-
 ```
-conda env create --file=env.yml
-```
-
-Alternatively, to manually install:
-
-```
-conda create -n bcat python=3.11 ipython
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 # or preferred version
-pip install numpy sympy jupyter pandas matplotlib seaborn omegaconf h5py scikit-learn scipy tabulate hydra-core tqdm wandb einops
-pip install torchdata==0.7.1 torchinfo torchmetrics rotary-embedding-torch dadaptation transformers accelerate diffusers["torch"] torch-harmonics neuraloperator ema-pytorch
+conda create -n bcat python=3.11
+pip install -e .[dev]
 ```
 
 ## Run the model
