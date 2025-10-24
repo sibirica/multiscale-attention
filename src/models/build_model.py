@@ -83,7 +83,7 @@ def build_model(params, model_config, data_config, symbol_env):
             assert False, f"Model {name} hasn't been implemented"
 
     if params.ema.enable and (params.is_master or (not params.eval_only)):
-        logger.info(f"Using EMA for model parameters")
+        logger.info("Using EMA for model parameters")
         modules["model_ema"] = EMA(
             modules["model"],
             beta=params.ema.beta,

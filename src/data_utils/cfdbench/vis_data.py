@@ -11,7 +11,6 @@ x = h5py.File(data_path, "r")["data"][:, :, 1:, :]
 
 print("load finished")
 import numpy as np
-import matplotlib.pyplot as plt
 
 
 def visualize_channels(data):

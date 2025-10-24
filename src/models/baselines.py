@@ -10,7 +10,7 @@ from logging import getLogger
 
 from collections import OrderedDict
 
-from neuralop.models import FNO
+from neuralop.models import FNO as FNO_lib
 
 from .transformer import TransformerDataEncoder
 from .embedder import get_embedder
@@ -77,7 +77,7 @@ class FNO(nn.Module):
     def __init__(self, config, max_output_dim):
         super().__init__()
         self.config = config
-        self.fno = FNO(
+        self.fno = FNO_lib(
             n_mode=(config.n_modes_height, config.n_modes_width, config.n_modes_depth),
             hidden_channels=config.hidden_channels,
             in_channels=max_output_dim,

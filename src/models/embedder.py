@@ -469,7 +469,7 @@ class VQEmbedder(nn.Module):
                     self.vq.load_state_dict(weights)
 
         else:
-            logger.warning(f"Missing VQModel pretrained weights!!!!!")
+            logger.warning("Missing VQModel pretrained weights!!!!!")
 
         for param in self.vq.parameters():
             param.requires_grad = False

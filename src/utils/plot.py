@@ -187,7 +187,7 @@ def plot_2d_pde_formal(
         step = input_len + output_step
         for j in range(dim):
             cur_target = data_all[step, ..., j]
-            plot_ax_formal(axs[j * 3, idx], cur_target, f"Target")
+            plot_ax_formal(axs[j * 3, idx], cur_target, "Target")
             cur_output = output[output_step, ..., j]
             plot_ax_formal(axs[j * 3 + 1, idx], cur_output, "Prediction")
             diff = cur_target - cur_output

@@ -311,9 +311,9 @@ class Trainer(object):
                 data["scaler"] = self.scaler.state_dict()
             if self.scheduler is not None:
                 data["scheduler"] = self.scheduler.state_dict()
-            logger.warning(f"Saving model and optimizer parameters ...")
+            logger.warning("Saving model and optimizer parameters ...")
         else:
-            logger.warning(f"Saving model parameters ...")
+            logger.warning("Saving model parameters ...")
 
         torch.save(data, path)
 
