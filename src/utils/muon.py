@@ -143,11 +143,16 @@ class Muon(torch.optim.Optimizer):
                 if "momentum_buffer" not in state:
                     state["momentum_buffer"] = torch.zeros_like(g)
                 buf = state["momentum_buffer"]
-                buf.mul_(momentum).add_(g)
-                if group["nesterov"]:
-                    g = g.add(buf, alpha=momentum)
-                else:
-                    g = buf
+
+                # buf.mul_(momentum).add_(g)
+                # if group["nesterov"]:
+                #     g = g.add(buf, alpha=momentum)
+                # else:
+                #     g = buf
+
+                buf.lerp_(g, 1 - momentum)
+                g = g.lerp_(buf, momentum) if group["nesterov"] else buf
+
                 u = zeropower_via_newtonschulz5(g, steps=group["ns_steps"]).view_as(p)
 
                 # scale update
