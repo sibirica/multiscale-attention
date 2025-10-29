@@ -858,3 +858,85 @@ class DynamicTanh(nn.Module):
 
     def extra_repr(self):
         return f"normalized_shape={self.normalized_shape}, alpha_init_value={self.alpha_init_value}"
+
+
+import numbers
+
+
+class RMSNorm(nn.Module):
+    """
+    RMSNorm supporting zero-center gamma.
+    """
+
+    def __init__(
+        self,
+        normalized_shape,
+        eps: float | None = 1e-5,
+        elementwise_affine: bool = True,
+        zero_center: bool = True,
+    ):
+        super().__init__()
+        if isinstance(normalized_shape, numbers.Integral):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = tuple(normalized_shape)
+        self.eps = eps
+
+        self.elementwise_affine = elementwise_affine
+        self.add_one = False
+        if self.elementwise_affine:
+            if zero_center:
+                self.weight = nn.Parameter(torch.zeros(self.normalized_shape))
+                self.add_one = True
+            else:
+                self.weight = nn.Parameter(torch.ones(self.normalized_shape))
+        else:
+            self.register_parameter("weight", None)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        weight = self.weight + 1 if self.add_one else self.weight
+        return F.rms_norm(x, self.normalized_shape, weight, self.eps)
+
+    def extra_repr(self) -> str:
+        return "{normalized_shape}, eps={eps}, elementwise_affine={elementwise_affine}".format(**self.__dict__)
+
+
+class LayerNorm(nn.Module):
+    """
+    LayerNorm supporting zero-center gamma.
+    """
+
+    def __init__(
+        self,
+        normalized_shape,
+        eps: float = 1e-5,
+        elementwise_affine: bool = True,
+        bias: bool = True,
+        zero_center: bool = True,
+    ):
+        super().__init__()
+        if isinstance(normalized_shape, numbers.Integral):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = tuple(normalized_shape)
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+        self.add_one = False
+        if self.elementwise_affine:
+            if zero_center:
+                self.weight = nn.Parameter(torch.zeros(self.normalized_shape))
+                self.add_one = True
+            else:
+                self.weight = nn.Parameter(torch.ones(self.normalized_shape))
+            if bias:
+                self.bias = nn.Parameter(torch.zeros(self.normalized_shape))
+            else:
+                self.register_parameter("bias", None)
+        else:
+            self.register_parameter("weight", None)
+            self.register_parameter("bias", None)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        weight = self.weight + 1 if self.add_one else self.weight
+        return F.layer_norm(input, self.normalized_shape, weight, self.bias, self.eps)
+
+    def extra_repr(self) -> str:
+        return "{normalized_shape}, eps={eps}, elementwise_affine={elementwise_affine}".format(**self.__dict__)
