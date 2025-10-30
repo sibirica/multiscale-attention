@@ -8,6 +8,8 @@ The code is based on the repository [PROSE](https://github.com/felix-lyx/prose).
 
 ```
 conda create -n bcat python=3.11
+conda activate bcat
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 pip install -e .[dev]
 ```
 
