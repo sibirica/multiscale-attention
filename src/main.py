@@ -24,7 +24,7 @@ torch.multiprocessing.set_sharing_strategy("file_system")
 np.seterr(divide="raise", under="ignore", over="raise", invalid="raise")
 
 
-@hydra.main(version_base=None, config_path="configs", config_name="main")
+@hydra.main(version_base=None, config_path="../configs", config_name="main")
 def main(params: DictConfig):
     if params.dryrun:
         print("Debugging run...")

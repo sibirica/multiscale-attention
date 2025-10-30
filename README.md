@@ -18,7 +18,7 @@ pip install -e .[dev]
 To launch a model training with modified arguments (arg1,val1), (arg2,val2):
 
 ```
-python main.py arg1=val1 arg2=val2
+python src/main.py arg1=val1 arg2=val2
 ```
 
 All default arguments can be found in the ```src/configs``` folder, and are managed using [Hydra](https://hydra.cc/).
@@ -37,7 +37,7 @@ Distributed training is available via PyTorch Distributed Data Parallel (DDP)
 To launch a run on 1 node with 4 GPU, use 
 
 ```
-torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py
+torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py
 ```
 
 ## Citation
