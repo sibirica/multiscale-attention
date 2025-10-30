@@ -79,6 +79,7 @@ class BCAT(nn.Module):
             "qk_norm": config.get("qk_norm", False),
             "flex_attn": self.flex_attn,
             "bias": config.get("bias", True),
+            "logit_softcap": config.get("logit_softcap", 0),
         }
 
         if config.kv_cache:

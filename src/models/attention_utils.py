@@ -156,10 +156,17 @@ class MultiheadAttention(nn.Module):
 
 
 class MultiheadFlexAttention(MultiheadAttention):
-    def __init__(self, embed_dim, num_heads, dropout=0.0, bias=True, qk_norm=False):
+    def __init__(self, embed_dim, num_heads, dropout=0.0, bias=True, qk_norm=False, logit_softcap=0):
         super().__init__(embed_dim, num_heads, dropout, bias, qk_norm)
         # self.flex_sdpa = torch.compile(flex_attention, dynamic=False)
         self.flex_sdpa = torch.compile(flex_attention)
+
+        if logit_softcap > 0:
+            from .softcapping import generate_tanh_softcap
+
+            self.score_mod = generate_tanh_softcap(logit_softcap, approx=True)
+        else:
+            self.score_mod = None
 
     def forward(
         self,
@@ -203,7 +210,9 @@ class MultiheadFlexAttention(MultiheadAttention):
             k, v = cache.update(k, v)
             k_len = k.size(2)
 
-        output = self.flex_sdpa(q, k, v, block_mask=block_mask)  # (bs, n_heads, seq_len, head_dim)
+        output = self.flex_sdpa(
+            q, k, v, block_mask=block_mask, score_mod=self.score_mod
+        )  # (bs, n_heads, seq_len, head_dim)
 
         output = output.transpose(1, 2).contiguous().view(bs, seq_len, -1)
         return self.out_proj(output)
@@ -232,13 +241,17 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
         norm=nn.LayerNorm,
         qk_norm=False,
         flex_attn=False,
+        logit_softcap=0,
     ) -> None:
         factory_kwargs = {"device": device, "dtype": dtype}
         super(nn.TransformerEncoderLayer, self).__init__()
 
         if flex_attn:
-            self.self_attn = MultiheadFlexAttention(d_model, nhead, dropout=attn_dropout, bias=bias, qk_norm=qk_norm)
+            self.self_attn = MultiheadFlexAttention(
+                d_model, nhead, dropout=attn_dropout, bias=bias, qk_norm=qk_norm, logit_softcap=logit_softcap
+            )
         else:
+            assert logit_softcap <= 0, "logit_softcap only works with flex_attn"
             self.self_attn = MultiheadAttention(d_model, nhead, dropout=attn_dropout, bias=bias, qk_norm=qk_norm)
         self.rotary = rotary
 

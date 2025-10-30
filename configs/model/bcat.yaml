@@ -15,6 +15,8 @@ activation: swiglu
 rotary: 0
 bias: 1
 
+logit_softcap: 0 # only works with flex_attn=1
+
 flex_attn: 0
 kv_cache: 1
 
