@@ -17,7 +17,7 @@ from .vq.vae import Encoder, Decoder
 logger = getLogger()
 
 
-def get_embedder(config, x_num, max_output_dim):
+def get_embedder(config, x_num: int, max_output_dim: int):
     match config.type:
         case "linear":
             embedder = LinearEmbedder
@@ -35,7 +35,7 @@ def get_embedder(config, x_num, max_output_dim):
     return embedder(config, x_num, max_output_dim)
 
 
-def layer_initialize(layer, mode="zero", gamma=0.01):
+def layer_initialize(layer: nn.Module, mode: str = "zero", gamma: float = 0.01):
     # re-initialize given layer to have small outputs
     if mode == "zero":
         nn.init.zeros_(layer.weight)
@@ -54,7 +54,7 @@ class LinearEmbedder(nn.Module):
     Preprocess data (break into patches) and embed them into target dimension.
     """
 
-    def __init__(self, config, x_num, data_dim):
+    def __init__(self, config, x_num: int, data_dim: int):
         super().__init__()
         self.config = config
 
@@ -91,10 +91,10 @@ class LinearEmbedder(nn.Module):
         )
         self.head = nn.Linear(self.conv_dim, self.patch_dim)
 
-    def get_pos_embeddings(self, t_len):
+    def get_pos_embeddings(self, t_len: int):
         return (self.time_embeddings[:, :t_len] + self.patch_position_embeddings).view(1, -1, self.dim)  # (1, t*p*p, d)
 
-    def encode(self, data, proj=True):
+    def encode(self, data: torch.Tensor, proj: bool = True):
         """
         (b, t, x_num, x_num, data_dim) -> (b, t*p*p, d)
         """
@@ -108,7 +108,7 @@ class LinearEmbedder(nn.Module):
         else:
             return data
 
-    def decode(self, data, proj=True):
+    def decode(self, data: torch.Tensor, proj: bool = True):
         """
         (b, t*p*p, d) -> (b, t, x_num, x_num, data_dim)
         """
@@ -128,7 +128,7 @@ class ConvEmbedder(nn.Module):
     Preprocess data (break into patches) and embed them into target dimension.
     """
 
-    def __init__(self, config, x_num, data_dim):
+    def __init__(self, config, x_num: int, data_dim: int):
         super().__init__()
         self.config = config
 
@@ -243,7 +243,7 @@ class ConvEmbedder(nn.Module):
         if config.get("initialize_small_output", 0):
             layer_initialize(self.head, mode=config.initialize_small_output)
 
-    def encode(self, data, times, skip_len=0):
+    def encode(self, data: torch.Tensor, times: torch.Tensor, skip_len: int = 0):
         """
         Input:
             data:           Tensor (bs, input_len, x_num, x_num, data_dim)
@@ -272,7 +272,7 @@ class ConvEmbedder(nn.Module):
         data = data.reshape(bs, -1, self.dim)
         return data
 
-    def decode(self, data_output):
+    def decode(self, data_output: torch.Tensor):
         """
         Input:
             data_output:     Tensor (bs, query_len, dim)
@@ -292,7 +292,7 @@ class PatchEmbedder(nn.Module):
     Preprocess data (break into patches) and embed them into target dimension.
     """
 
-    def __init__(self, config, x_num, data_dim):
+    def __init__(self, config, x_num: int, data_dim: int):
         super().__init__()
         self.config = config
 
@@ -361,7 +361,7 @@ class PatchEmbedder(nn.Module):
         )
         self.head = nn.Conv2d(in_channels=self.conv_dim, out_channels=self.data_dim, kernel_size=1, stride=1)
 
-    def encode(self, data, times, mode="none"):
+    def encode(self, data: torch.Tensor, times: torch.Tensor, mode: str = "none"):
         """
         Input:
             data:           Tensor (bs, input_len, x_num, x_num, data_dim)
@@ -435,7 +435,7 @@ class PatchEmbedder(nn.Module):
 
 
 class VQEmbedder(nn.Module):
-    def __init__(self, config, data_dim):
+    def __init__(self, config, data_dim: int):
         super().__init__()
         self.config = config
 
@@ -489,7 +489,7 @@ class VQEmbedder(nn.Module):
             case "learnable":
                 self.time_embeddings = get_embeddings((1, config.get("max_time_len", 10), 1, self.dim))
 
-    def data_to_ids(self, data):
+    def data_to_ids(self, data: torch.Tensor):
         """
         Input:
             data:           Tensor (bs, t, x_num, x_num, data_dim)
@@ -507,7 +507,7 @@ class VQEmbedder(nn.Module):
 
         return quant, ids
 
-    def ids_to_data(self, ids):
+    def ids_to_data(self, ids: torch.LongTensor):
         """
         Input:
             ids:            LongTensor (bs, t, patch_num, patch_num)
@@ -520,7 +520,13 @@ class VQEmbedder(nn.Module):
         data = rearrange(data, "(b t) c x y -> b t x y c", b=bs)
         return data
 
-    def add_embeddings(self, times, input_quant=None, input_ids=None, skip_len=0):
+    def add_embeddings(
+        self,
+        times: torch.Tensor,
+        input_quant: torch.Tensor = None,
+        input_ids: torch.LongTensor = None,
+        skip_len: int = 0,
+    ):
         """
         Input:
             times:          Tensor (bs, input_len, 1)
@@ -562,7 +568,7 @@ class ResNetEmbedder(nn.Module):
     Preprocess data (break into patches) and embed them into target dimension. TODO: modify name for Muon.
     """
 
-    def __init__(self, config, x_num, data_dim):
+    def __init__(self, config, x_num: int, data_dim: int):
         super().__init__()
         self.config = config
 
@@ -601,7 +607,7 @@ class ResNetEmbedder(nn.Module):
         self.quant_conv = torch.nn.Conv2d(config.z_ch, self.dim, 1)
         self.post_quant_conv = torch.nn.Conv2d(self.dim, config.z_ch, 1)
 
-    def encode(self, data, times, skip_len=0):
+    def encode(self, data: torch.Tensor, times: torch.Tensor, skip_len: int = 0):
         """
         Input:
             data:           Tensor (bs, input_len, x_num, x_num, data_dim)
@@ -630,7 +636,7 @@ class ResNetEmbedder(nn.Module):
         data = data.reshape(bs, -1, self.dim)
         return data
 
-    def decode(self, data_output):
+    def decode(self, data_output: torch.Tensor):
         """
         Input:
             data_output:     Tensor (bs, query_len, dim)
@@ -653,7 +659,7 @@ class ConvRegEmbedder(nn.Module):
     Preprocess data (break into patches) and embed them into target dimension.
     """
 
-    def __init__(self, config, x_num, data_dim):
+    def __init__(self, config, x_num: int, data_dim: int):
         super().__init__()
         self.config = config
 
@@ -725,7 +731,7 @@ class ConvRegEmbedder(nn.Module):
         )
         self.head = nn.Conv2d(in_channels=self.conv_dim, out_channels=self.data_dim, kernel_size=1, stride=1)
 
-    def encode(self, data, times, skip_len=0):
+    def encode(self, data: torch.Tensor, times: torch.Tensor, skip_len: int = 0):
         """
         Input:
             data:           Tensor (bs, input_len, x_num, x_num, data_dim)
@@ -758,7 +764,7 @@ class ConvRegEmbedder(nn.Module):
         data = data.reshape(bs, -1, self.dim)
         return data
 
-    def decode(self, data_output):
+    def decode(self, data_output: torch.Tensor):
         """
         Input:
             data_output:     Tensor (bs, query_len, dim)

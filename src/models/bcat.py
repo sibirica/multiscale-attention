@@ -4,6 +4,7 @@ Autoregressive BCAT model.
 
 from logging import getLogger
 from functools import partial
+from typing import Callable
 
 import torch
 import torch.nn as nn
@@ -24,7 +25,7 @@ from .kv_cache import KVCache
 logger = getLogger()
 
 
-def block_lower_triangular_mask(block_size, block_num, use_float=False):
+def block_lower_triangular_mask(block_size: int, block_num: int, use_float: bool = False):
     """
     Create a block lower triangular boolean mask. (upper right part will be 1s, and represent locations to ignore.)
     """
@@ -49,7 +50,7 @@ class BCAT(nn.Module):
     Wrapper for the autoregressive BCAT model.
     """
 
-    def __init__(self, config, x_num, max_output_dim, max_data_len=1):
+    def __init__(self, config, x_num: int, max_output_dim: int, max_data_len: int = 1):
         super().__init__()
         self.config = config
         self.x_num = x_num
@@ -116,7 +117,7 @@ class BCAT(nn.Module):
         s += f"\tTransformer:    {sum([p.numel() for p in self.transformer.parameters() if p.requires_grad]):,}"
         return s
 
-    def forward(self, mode, **kwargs):
+    def forward(self, mode: str, **kwargs):
         """
         Forward function with different forward modes.
         ### Small hack to handle PyTorch distributed.
@@ -130,7 +131,7 @@ class BCAT(nn.Module):
         else:
             raise Exception(f"Unknown mode: {mode}")
 
-    def fwd(self, data, times, input_len: int, **kwargs):
+    def fwd(self, data: torch.Tensor, times: torch.Tensor, input_len: int, **kwargs):
         """
         Inputs:
             data:          Tensor     (bs, input_len+output_len, x_num, x_num, data_dim)
@@ -176,7 +177,15 @@ class BCAT(nn.Module):
         return data_output
 
     @torch.compiler.disable()
-    def generate(self, data_input, times, input_len: int, data_mask, carry_over_c=-1, **kwargs):
+    def generate(
+        self,
+        data_input: torch.Tensor,
+        times: torch.Tensor,
+        input_len: int,
+        data_mask: torch.Tensor,
+        carry_over_c: int = -1,
+        **kwargs,
+    ):
         """
         Inputs:
             data_input:    Tensor     (bs, input_len, x_num, x_num, data_dim)
@@ -247,7 +256,16 @@ class BCAT(nn.Module):
         return data_all[:, input_len:]
 
     @torch.compiler.disable()
-    def rollout(self, data_input, times, input_len: int, data_mask, normalizer, carry_over_c=-1, **kwargs):
+    def rollout(
+        self,
+        data_input: torch.Tensor,
+        times: torch.Tensor,
+        input_len: int,
+        data_mask: torch.Tensor,
+        normalizer: Callable,
+        carry_over_c: int = -1,
+        **kwargs,
+    ):
         """
         Inputs:
             data_input:    Tensor     (bs, input_len=1, x_num, x_num, data_dim)
@@ -292,7 +310,7 @@ class BCAT_Reg(nn.Module):
     Wrapper for the autoregressive BCAT model with additional registers.
     """
 
-    def __init__(self, config, x_num, max_output_dim, max_data_len=1):
+    def __init__(self, config, x_num: int, max_output_dim: int, max_data_len: int = 1):
         super().__init__()
         self.config = config
         self.x_num = x_num
@@ -350,7 +368,7 @@ class BCAT_Reg(nn.Module):
         s += f"\tTransformer:    {sum([p.numel() for p in self.transformer.parameters() if p.requires_grad]):,}"
         return s
 
-    def forward(self, mode, **kwargs):
+    def forward(self, mode: str, **kwargs):
         """
         Forward function with different forward modes.
         ### Small hack to handle PyTorch distributed.
@@ -362,7 +380,7 @@ class BCAT_Reg(nn.Module):
         else:
             raise Exception(f"Unknown mode: {mode}")
 
-    def fwd(self, data, times, input_len: int, **kwargs):
+    def fwd(self, data: torch.Tensor, times: torch.Tensor, input_len: int, **kwargs):
         """
         Inputs:
             data:          Tensor     (bs, input_len+output_len, x_num, x_num, data_dim)
@@ -408,7 +426,15 @@ class BCAT_Reg(nn.Module):
         return data_output
 
     @torch.compiler.disable()
-    def generate(self, data_input, times, input_len: int, data_mask, carry_over_c=-1, **kwargs):
+    def generate(
+        self,
+        data_input: torch.Tensor,
+        times: torch.Tensor,
+        input_len: int,
+        data_mask: torch.Tensor,
+        carry_over_c: int = -1,
+        **kwargs,
+    ):
         """
         Inputs:
             data_input:    Tensor     (bs, input_len, x_num, x_num, data_dim)

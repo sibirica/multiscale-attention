@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from functools import partial
-from typing import Optional, Union, Callable, Tuple
+from typing import Callable
 from torch import Tensor
 
 from einops import rearrange
@@ -28,7 +28,7 @@ N_MAX_POSITIONS = 1024  # maximum input sequence length
 
 
 class FFN(nn.Module):
-    def __init__(self, dim, hidden_dim, act="gelu", dropout=0, bias=True):
+    def __init__(self, dim: int, hidden_dim: int, act: str = "gelu", dropout: float = 0.0, bias: bool = True):
         super().__init__()
 
         self.fc1 = nn.Linear(dim, hidden_dim, bias)
@@ -42,7 +42,7 @@ class FFN(nn.Module):
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.fc2 = nn.Linear(hidden_dim, dim, bias)
 
-    def forward(self, x):
+    def forward(self, x: Tensor):
         if self.fc_gate is None:
             return self.fc2(self.dropout(self.activation(self.fc1(x))))
         else:
@@ -50,7 +50,7 @@ class FFN(nn.Module):
 
 
 class MultiheadAttention(nn.Module):
-    def __init__(self, embed_dim, num_heads, dropout=0.0, bias=True, qk_norm=False):
+    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.0, bias: bool = True, qk_norm: bool = False):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -73,15 +73,15 @@ class MultiheadAttention(nn.Module):
 
     def forward(
         self,
-        query,
-        key,
-        value,
-        key_padding_mask=None,
-        attn_mask=None,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        key_padding_mask: Tensor | None = None,
+        attn_mask: Tensor | None = None,
         block_mask=None,
-        is_causal=False,
+        is_causal: bool = False,
         rotary_emb=None,
-        cache=None,
+        cache: KVCache | None = None,
     ):
         bs, seq_len, _ = query.size()
         k_len = key.size(1)
@@ -156,7 +156,15 @@ class MultiheadAttention(nn.Module):
 
 
 class MultiheadFlexAttention(MultiheadAttention):
-    def __init__(self, embed_dim, num_heads, dropout=0.0, bias=True, qk_norm=False, logit_softcap=0):
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        dropout: float = 0.0,
+        bias: bool = True,
+        qk_norm: bool = False,
+        logit_softcap: int = 0,
+    ):
         super().__init__(embed_dim, num_heads, dropout, bias, qk_norm)
         # self.flex_sdpa = torch.compile(flex_attention, dynamic=False)
         self.flex_sdpa = torch.compile(flex_attention)
@@ -170,15 +178,15 @@ class MultiheadFlexAttention(MultiheadAttention):
 
     def forward(
         self,
-        query,
-        key,
-        value,
-        key_padding_mask=None,
-        attn_mask=None,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        key_padding_mask: Tensor | None = None,
+        attn_mask: Tensor | None = None,
         block_mask=None,
-        is_causal=False,
+        is_causal: bool = False,
         rotary_emb=None,
-        cache=None,
+        cache: KVCache | None = None,
     ):
         bs, seq_len, _ = query.size()
         k_len = key.size(1)
@@ -231,17 +239,17 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
         dim_feedforward: int = 2048,
         dropout: float = 0,
         attn_dropout: float = 0,
-        activation: Union[str, Callable[[Tensor], Tensor]] = F.relu,
+        activation: str | Callable[[Tensor], Tensor] = F.relu,
         layer_norm_eps: float = 1e-5,
         norm_first: bool = False,
         bias: bool = True,
-        device=None,
+        device: torch.device | None = None,
         dtype=None,
-        rotary=False,
-        norm=nn.LayerNorm,
-        qk_norm=False,
-        flex_attn=False,
-        logit_softcap=0,
+        rotary: bool = False,
+        norm: nn.Module = nn.LayerNorm,
+        qk_norm: bool = False,
+        flex_attn: bool = False,
+        logit_softcap: float = 0,
     ) -> None:
         factory_kwargs = {"device": device, "dtype": dtype}
         super(nn.TransformerEncoderLayer, self).__init__()
@@ -268,8 +276,8 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
     def forward(
         self,
         src: Tensor,
-        src_mask: Optional[Tensor] = None,
-        src_key_padding_mask: Optional[Tensor] = None,
+        src_mask: Tensor | None = None,
+        src_key_padding_mask: Tensor | None = None,
         block_mask=None,
         is_causal: bool = False,
         rotary_emb=None,
@@ -313,8 +321,8 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
     def _sa_block(
         self,
         x: Tensor,
-        attn_mask: Optional[Tensor],
-        key_padding_mask: Optional[Tensor],
+        attn_mask: Tensor | None,
+        key_padding_mask: Tensor | None,
         block_mask=None,
         is_causal: bool = False,
         rotary_emb=None,
@@ -340,9 +348,9 @@ class CustomTransformerEncoder(nn.Module):
 
     def __init__(
         self,
-        encoder_layer,
+        encoder_layer: nn.Module,
         num_layers: int,
-        norm: Optional[nn.Module] = None,
+        norm: nn.Module | None = None,
         config=None,
     ) -> None:
         super().__init__()
@@ -359,7 +367,14 @@ class CustomTransformerEncoder(nn.Module):
             self.rotary_emb = None
             self.rotary = False
 
-    def forward(self, src, mask=None, src_key_padding_mask=None, block_mask=None, is_causal: Optional[bool] = False):
+    def forward(
+        self,
+        src: Tensor,
+        mask: Tensor | None = None,
+        src_key_padding_mask: Tensor | None = None,
+        block_mask=None,
+        is_causal: bool = False,
+    ):
         # prepare masks
         src_key_padding_mask = F._canonical_mask(
             mask=src_key_padding_mask,
@@ -398,12 +413,12 @@ class CacheCustomTransformerEncoderLayer(CustomTransformerEncoderLayer):
     def forward(
         self,
         src: Tensor,
-        src_mask: Optional[Tensor] = None,
-        src_key_padding_mask: Optional[Tensor] = None,
+        src_mask: Tensor | None = None,
+        src_key_padding_mask: Tensor | None = None,
         block_mask=None,
         is_causal: bool = False,
         rotary_emb=None,
-        cache=None,
+        cache: KVCache | None = None,
     ):
         if self.training:
             return super().forward(
@@ -458,12 +473,12 @@ class CacheCustomTransformerEncoderLayer(CustomTransformerEncoderLayer):
     def _sa_block(
         self,
         x: Tensor,
-        attn_mask: Optional[Tensor],
-        key_padding_mask: Optional[Tensor],
+        attn_mask: Tensor | None,
+        key_padding_mask: Tensor | None,
         block_mask=None,
         is_causal: bool = False,
         rotary_emb=None,
-        cache=None,
+        cache: KVCache | None = None,
     ) -> Tensor:
         x = self.self_attn(
             x,
@@ -482,12 +497,12 @@ class CacheCustomTransformerEncoderLayer(CustomTransformerEncoderLayer):
 class CacheCustomTransformerEncoder(CustomTransformerEncoder):
     def forward(
         self,
-        src,
-        mask=None,
-        src_key_padding_mask=None,
+        src: Tensor,
+        mask: Tensor | None = None,
+        src_key_padding_mask: Tensor | None = None,
         block_mask=None,
-        is_causal: Optional[bool] = False,
-        cache: Optional[KVCache] = None,
+        is_causal: bool = False,
+        cache: KVCache | None = None,
     ):
         if self.training:
             if cache is not None:
@@ -524,9 +539,9 @@ class CacheCustomTransformerEncoder(CustomTransformerEncoder):
 class CustomTransformerDecoder(nn.Module):
     def __init__(
         self,
-        decoder_layer,
+        decoder_layer: nn.Module,
         num_layers: int,
-        norm: Optional[nn.Module] = None,
+        norm: nn.Module | None = None,
         config=None,
     ) -> None:
         super().__init__()
@@ -547,12 +562,12 @@ class CustomTransformerDecoder(nn.Module):
         self,
         tgt: Tensor,
         memory: Tensor,
-        tgt_mask: Optional[Tensor] = None,
-        memory_mask: Optional[Tensor] = None,
-        tgt_key_padding_mask: Optional[Tensor] = None,
-        memory_key_padding_mask: Optional[Tensor] = None,
-        tgt_is_causal=False,
-        memory_is_causal=False,
+        tgt_mask: Tensor | None = None,
+        memory_mask: Tensor | None = None,
+        tgt_key_padding_mask: Tensor | None = None,
+        memory_key_padding_mask: Tensor | None = None,
+        tgt_is_causal: bool = False,
+        memory_is_causal: bool = False,
     ):
         output = tgt
 
@@ -590,17 +605,17 @@ class OperatorDecoderLayer(nn.Module):
         nhead: int,
         dim_feedforward: int = 2048,
         dropout: float = 0,
-        attn_dropout=0,
-        activation=F.relu,
+        attn_dropout: float = 0,
+        activation: str = "gelu",
         layer_norm_eps: float = 1e-5,
         norm_first: bool = False,
         bias: bool = True,
-        device=None,
+        device: torch.device | None = None,
         dtype=None,
-        rotary=False,
-        norm=nn.LayerNorm,
-        qk_norm=False,
-        flex_attn=False,
+        rotary: bool = False,
+        norm: nn.Module = nn.LayerNorm,
+        qk_norm: bool = False,
+        flex_attn: bool = False,
     ) -> None:
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -627,10 +642,10 @@ class OperatorDecoderLayer(nn.Module):
         self,
         tgt: Tensor,
         memory: Tensor,
-        tgt_mask: Optional[Tensor] = None,
-        memory_mask: Optional[Tensor] = None,
-        tgt_key_padding_mask: Optional[Tensor] = None,
-        memory_key_padding_mask: Optional[Tensor] = None,
+        tgt_mask: Tensor | None = None,
+        memory_mask: Tensor | None = None,
+        tgt_key_padding_mask: Tensor | None = None,
+        memory_key_padding_mask: Tensor | None = None,
         tgt_is_causal: bool = False,
         memory_is_causal: bool = False,
         rotary_emb=None,
@@ -657,8 +672,8 @@ class OperatorDecoderLayer(nn.Module):
         self,
         x: Tensor,
         mem: Tensor,
-        attn_mask: Optional[Tensor],
-        key_padding_mask: Optional[Tensor],
+        attn_mask: Tensor | None,
+        key_padding_mask: Tensor | None,
         block_mask=None,
         is_causal: bool = False,
         rotary_emb=None,
@@ -719,7 +734,7 @@ class LearnablePE(nn.Module):
 
         self.pe = Embedding(max_len, d_model)
 
-    def forward(self, x: Tensor, positions: Optional[Tensor] = None, batch_first: bool = True) -> Tensor:
+    def forward(self, x: Tensor, positions: Tensor | None = None, batch_first: bool = True) -> Tensor:
         """
         Arguments:
             x: Tensor [batch_size, seq_len, embedding_dim] if batch_first
@@ -740,7 +755,7 @@ class LearnablePE(nn.Module):
         return self.dropout(x)
 
 
-def get_embeddings(size, type=None):
+def get_embeddings(size: list | tuple, type: str | None = None):
     match type:
         case None:
             patch_embeddings = nn.Parameter(torch.randn(*size))
@@ -755,7 +770,7 @@ def get_embeddings(size, type=None):
 
 
 class GLU(nn.Module):
-    def forward(self, x, gates=None):
+    def forward(self, x: Tensor, gates: Tensor | None = None) -> Tensor:
         if gates is None:
             x, gates = x.chunk(2, dim=-1)
         return self.act(x) * gates
@@ -773,7 +788,7 @@ class SwiGLU(GLU):
         self.act = nn.SiLU()
 
 
-def get_activation(act="gelu"):
+def get_activation(act: str = "gelu"):
     match act:
         case "relu":
             return nn.ReLU
@@ -797,11 +812,11 @@ def get_activation(act="gelu"):
 """
 
 
-def get_padding_mask(lengths, max_len=None):
+def get_padding_mask(lengths: torch.LongTensor, max_len: int | None = None):
     """
     Input:
         lengths:           LongTensor (bs, )  length of each example
-        max_len:           Optional[int]      if None, max_len = lengths.max()
+        max_len:           int | None         if None, max_len = lengths.max()
     Output:
         key_padding_mask:  BoolTensor (bs, max_len)    (positions with value True are padding)
     """
@@ -822,11 +837,11 @@ def get_block_attn_mask(block_size: int, n_repeat: int, device=torch.device("cpu
     return torch.block_diag(*blocks).bool()
 
 
-def _get_clones(module, N):
+def _get_clones(module: nn.Module, N: int):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
 
-def Embedding(num_embeddings, embedding_dim, padding_idx=None):
+def Embedding(num_embeddings: int, embedding_dim: int, padding_idx: int | None = None):
     m = nn.Embedding(num_embeddings, embedding_dim, padding_idx=padding_idx)
     nn.init.normal_(m.weight, mean=0, std=embedding_dim**-0.5)
     if padding_idx is not None:
@@ -839,11 +854,11 @@ class GroupNorm(nn.Module):
     Channel last Group norm. Expects input of shape (b, t, h, w, c).
     """
 
-    def __init__(self, num_groups, num_channels, affine=True, eps=1e-5):
+    def __init__(self, num_groups: int, num_channels: int, affine: bool = True, eps: float = 1e-5):
         super().__init__()
         self.norm = nn.GroupNorm(num_groups, num_channels, eps=eps, affine=affine)
 
-    def forward(self, x):
+    def forward(self, x: Tensor):
         b = x.size(0)
         x = rearrange(x, "b t h w c -> (b t) c h w")
         x = self.norm(x)
@@ -855,7 +870,7 @@ class GroupNorm(nn.Module):
 
 
 class DynamicTanh(nn.Module):
-    def __init__(self, normalized_shape, alpha_init_value=0.5, **kwargs):
+    def __init__(self, normalized_shape, alpha_init_value: float = 0.5, **kwargs):
         super().__init__()
         self.normalized_shape = normalized_shape
         self.alpha_init_value = alpha_init_value
@@ -887,6 +902,7 @@ class RMSNorm(nn.Module):
         eps: float | None = 1e-5,
         elementwise_affine: bool = True,
         zero_center: bool = True,
+        **kwargs,
     ):
         super().__init__()
         if isinstance(normalized_shape, numbers.Integral):
@@ -905,7 +921,7 @@ class RMSNorm(nn.Module):
         else:
             self.register_parameter("weight", None)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         weight = self.weight + 1 if self.add_one else self.weight
         return F.rms_norm(x, self.normalized_shape, weight, self.eps)
 
@@ -925,6 +941,7 @@ class LayerNorm(nn.Module):
         elementwise_affine: bool = True,
         bias: bool = True,
         zero_center: bool = True,
+        **kwargs,
     ):
         super().__init__()
         if isinstance(normalized_shape, numbers.Integral):
@@ -947,7 +964,7 @@ class LayerNorm(nn.Module):
             self.register_parameter("weight", None)
             self.register_parameter("bias", None)
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
+    def forward(self, input: Tensor) -> Tensor:
         weight = self.weight + 1 if self.add_one else self.weight
         return F.layer_norm(input, self.normalized_shape, weight, self.bias, self.eps)
 
