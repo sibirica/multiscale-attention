@@ -216,9 +216,9 @@ class Trainer(object):
                     case "warmup_stable_decay":
                         scheduler_args["num_decay_steps"] = int(params.optim.max_iters * params.optim.decay)
                         scheduler_args["min_lr_ratio"] = params.optim.get("min_lr_ratio", 0)
-                        scheduler_args["num_stable_steps"] = (
-                            params.optim.max_iters - params.optim.warmup - scheduler_args["num_decay_steps"]
-                        )
+                        # scheduler_args["num_stable_steps"] = (
+                        #     params.optim.max_iters - params.optim.warmup - scheduler_args["num_decay_steps"]
+                        # )
 
                 self.scheduler = get_scheduler(
                     name=params.optim.scheduler_type,
