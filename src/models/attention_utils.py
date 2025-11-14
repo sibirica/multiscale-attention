@@ -14,7 +14,7 @@ from torch import Tensor
 from einops import rearrange
 
 from rotary_embedding_torch import RotaryEmbedding
-from torchtune.modules import RotaryPositionalEmbeddings
+#from torchtune.modules import RotaryPositionalEmbeddings
 
 from torch.nn.attention.flex_attention import flex_attention
 from torch.nn.attention import SDPBackend, sdpa_kernel

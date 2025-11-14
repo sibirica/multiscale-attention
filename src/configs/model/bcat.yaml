@@ -1,7 +1,7 @@
 name: bcat_auto
 
 # shared attributes
-n_layer: 12
+n_layer: 6 # 12
 dim_emb: 1024
 dim_ffn: 2752
 dropout: 0
@@ -17,7 +17,7 @@ rotary: 0
 flex_attn: 0
 kv_cache: 1
 
-patch_num: 16 # for input, number of patches per dimension
+patch_num: 8 #16 # for input, number of patches per dimension
 patch_num_output: ${.patch_num} # for output, number of patches per dimension
 
 embedder:

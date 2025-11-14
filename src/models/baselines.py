@@ -10,7 +10,7 @@ from logging import getLogger
 
 from collections import OrderedDict
 
-from neuralop.models import FNO3d
+#from neuralop.models import FNO3d
 
 from .transformer import TransformerDataEncoder
 from .embedder import get_embedder

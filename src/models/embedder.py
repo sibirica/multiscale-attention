@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import math
 from einops import rearrange
 from einops.layers.torch import Rearrange
-from neuralop.models import FNO2d
+#from neuralop.models import FNO2d
 
 try:
     from .attention_utils import get_embeddings, get_activation
