@@ -1,0 +1,58 @@
+[project]
+name = "bcat"
+version = "0.1.0"
+description = "BCAT"
+readme = "README.md"
+requires-python = ">=3.11"
+
+dependencies = [
+    "torch (>= 2.5.1)",
+    "numpy",
+    "sympy",
+    "pandas",
+    "matplotlib",
+    "seaborn",
+    "omegaconf",
+    "hydra-core",
+    "h5py",
+    "scipy",
+    "tabulate",
+    "tqdm",
+    "wandb",
+    "einops",
+    "torchdata (==0.7.1)",
+    "torchinfo",
+    "torchmetrics",
+    "rotary-embedding-torch",
+    "ema-pytorch",
+    "dadaptation",
+    "transformers",
+    "accelerate",
+    "diffusers[torch]",
+    "torch-harmonics",
+    "neuraloperator",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "jupyter",
+    "ipython",
+    "pyclean"
+]
+
+#### Package build ####
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+#### Format ####
+[tool.ruff]
+line-length = 120
+lint.ignore = ["D100", "D104", "E731", "E741", "E402", "E722", "F401", "F841"]
