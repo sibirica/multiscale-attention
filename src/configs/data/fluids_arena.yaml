@@ -1,8 +1,8 @@
-types: [incom_ns_arena_u]
+types: [incom_ns_arena]
 
 max_output_dimension: 4
 train_val_test_ratio: [0.8, 0.1, 0.1]
-t_num: 14
+t_num: 20
 x_num: 128 # how many to use for model input
 
 mixed_length: 0 # 0 means all have same length, otherwise, pad to t_num
@@ -19,10 +19,10 @@ tie_fields: 1
 sampler:
   uniform: 1
 
-  incom_ns_arena_u: 1
+  incom_ns_arena: 1
 
-incom_ns_arena_u:
-  folder: /s1/shared/dataset/pdearena/NavierStokes-2D
+incom_ns_arena:
+  folder: /s1/shared/dataset/pdearena/NavierStokes-2D-conditioned
   t_step: 1 # dt=1.5
   x_num: 128
   dim: 3

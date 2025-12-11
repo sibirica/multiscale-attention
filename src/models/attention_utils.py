@@ -27,6 +27,8 @@ N_MAX_POSITIONS = 1024  # maximum input sequence length
 --------------- Attention Variants ---------------
 """
 
+from .checkpoint_wrapper import checkpoint_wrapper
+
 
 class FFN(nn.Module):
     def __init__(self, dim, hidden_dim, act="gelu", dropout=0):
@@ -210,7 +212,6 @@ class MultiheadFlexAttention(MultiheadAttention):
 
         output = output.transpose(1, 2).contiguous().view(bs, seq_len, -1)
         return self.out_proj(output)
-
 
 class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
     """
