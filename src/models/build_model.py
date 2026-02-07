@@ -6,6 +6,7 @@ from .bcat import BCAT
 from .causal import BCAT_causal
 from .baselines import FNO, UNet, ViT, DeepONet
 from .space_time import ST_auto
+from .multiscale_bcat import MultiscaleBCAT
 
 logger = getLogger()
 
@@ -23,6 +24,11 @@ def build_model(params, model_config, data_config, symbol_env):
 
         case "bcat_auto":
             modules["model"] = BCAT(
+                model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
+            )
+
+        case "multiscale_bcat_auto":
+            modules["model"] = MultiscaleBCAT(
                 model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
             )
 
