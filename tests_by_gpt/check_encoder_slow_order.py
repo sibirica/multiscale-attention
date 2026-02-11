@@ -10,7 +10,7 @@ from models.multiscale_utils import (  # noqa: E402
     RecombineDecoder,
     SplitEncoder,
     TwoLevelTransformerEncoder,
-    TwoLevelTransformerEncoderLayer,
+    TwoScaleTransformerEncoderLayer,
 )
 
 
@@ -75,7 +75,7 @@ def main() -> None:
         expected_spatial = torch.arange(spatial_tokens).view(1, spatial_tokens)
         assert torch.equal(x_slow[:, k, :, 1], expected_spatial)
 
-    layer = TwoLevelTransformerEncoderLayer(
+    layer = TwoScaleTransformerEncoderLayer(
         fast_embed_dim=fast_dim,
         slow_embed_dim=slow_dim,
         num_heads=2,

@@ -92,6 +92,8 @@ def main(params: DictConfig):
     if params.use_wandb:
         if not params.wandb.id:
             params.wandb.id = wandb.util.generate_id()
+        if not params.wandb.name:
+            params.wandb.name = params.exp_id
         wandb.init(
             project=params.wandb.project if params.wandb.project else params.exp_name,
             resume="allow",

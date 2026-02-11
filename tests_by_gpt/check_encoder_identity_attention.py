@@ -6,7 +6,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from models.multiscale_utils import TwoLevelTransformerEncoderLayer  # noqa: E402
+from models.multiscale_utils import TwoScaleTransformerEncoderLayer  # noqa: E402
 
 
 class FirstTokenPool(torch.nn.Module):
@@ -38,7 +38,7 @@ def main() -> None:
     slow_dim = 4
     seq_len = time_len * spatial_tokens
 
-    layer = TwoLevelTransformerEncoderLayer(
+    layer = TwoScaleTransformerEncoderLayer(
         fast_embed_dim=fast_dim,
         slow_embed_dim=slow_dim,
         num_heads=2,

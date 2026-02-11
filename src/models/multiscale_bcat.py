@@ -18,7 +18,7 @@ from .multiscale_utils import (
     RecombineDecoder,
     SplitEncoder,
     TwoLevelTransformerEncoder,
-    TwoLevelTransformerEncoderLayer,
+    TwoScaleTransformerEncoderLayer,
 )
 
 
@@ -67,7 +67,9 @@ class MultiscaleBCAT(nn.Module):
             act=activation,
             dropout=config.dropout,
         )
-        pool_ffn_split = PoolFFN(
+
+        # needs better name - embedding into slow layer
+        encoder_pool_ffn = PoolFFN(
             in_dim=embedder_dim,
             out_dim=slow_embed_dim,
             hidden_dim=pool_hidden_dim,
@@ -77,7 +79,7 @@ class MultiscaleBCAT(nn.Module):
         )
         lift_ffn = nn.Linear(slow_embed_dim, fast_embed_dim // 2)
 
-        encoder_layer = TwoLevelTransformerEncoderLayer(
+        encoder_layer = TwoScaleTransformerEncoderLayer(
             fast_embed_dim=fast_embed_dim,
             slow_embed_dim=slow_embed_dim,
             num_heads=config.n_head,
@@ -92,7 +94,7 @@ class MultiscaleBCAT(nn.Module):
         split_encoder = SplitEncoder(
             encoder=self.embedder,
             rate=self.rate,
-            pool_ffn=pool_ffn_split,
+            pool_ffn=encoder_pool_ffn,
             time_dim=1,
             spatial_tokens=config.embedder.patch_num**2,
         )
@@ -101,6 +103,8 @@ class MultiscaleBCAT(nn.Module):
             slow_embed_dim=slow_embed_dim,
             rate=self.rate,
             hidden_dim=recombine_hidden_dim,
+            lift_ffn=lift_ffn,
+            lift_dim=fast_embed_dim // 2,
             act=activation,
             dropout=config.dropout,
             time_dim=1,
@@ -142,8 +146,8 @@ class MultiscaleBCAT(nn.Module):
 
     def forward(self, mode, **kwargs):
         """
-        Forward function with different forward modes.
-        ### Small hack to handle PyTorch distributed.
+        Forward function with different forward modes
+        with small hack to handle PyTorch distributed.
         """
         if mode == "fwd":
             return self.fwd(**kwargs)
@@ -231,9 +235,14 @@ class MultiscaleBCAT(nn.Module):
         cur_len = input_len
         # NOTE: kv_cache is disabled for now.
 
-        step = self.rate
-        for i in range(0, output_len, step):
-            block_len = min(step, output_len - i)
+        remaining = output_len
+        # First block aligns to the next multiple of rate (or full rate if already aligned).
+        # Outputs past desired length are not generated.
+        step_len = (-cur_len) % self.rate
+        if step_len == 0:
+            step_len = self.rate
+        while remaining > 0:
+            block_len = min(step_len, remaining)
             cur_data_input = data_all[:, :cur_len]  # (bs, cur_len, x_num, x_num, data_dim)
 
             mask = block_mask = None
@@ -276,5 +285,7 @@ class MultiscaleBCAT(nn.Module):
 
             data_all[:, cur_len : cur_len + block_len] = new_output
             cur_len += block_len
+            remaining -= block_len
+            step_len = self.rate
 
         return data_all[:, input_len:]

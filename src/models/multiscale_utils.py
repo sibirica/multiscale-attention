@@ -39,9 +39,9 @@ def lift(
         return torch.repeat_interleave(out, repeats=rate, dim=time_dim)
 
     x = out.movedim(time_dim, 1)
-    b, t, c = x.shape[0], x.shape[1], x.shape[-1]
+    t = x.shape[1]
     if t % spatial_tokens != 0:
-        raise ValueError("lift expects time length divisible by spatial_tokens.")
+        raise ValueError("lift expects 'time' length divisible by spatial_tokens.")
 
     t_len = t // spatial_tokens
     # [B, T*S, D] -> [B, T, S, D]
@@ -86,7 +86,7 @@ class PoolFFN(nn.Module):
         last_two = x_blocks.shape[-2:]
         if last_two != (self.rate, self.in_dim):
             raise ValueError(f"Expected trailing shape ({self.rate}, {self.in_dim}), got {last_two}.")
-        x_flat = x_blocks.reshape(*x_blocks.shape[:-2], self.rate * self.in_dim)
+        x_flat = rearrange(x_blocks, "... r c -> ... (r c)", r=self.rate, c=self.in_dim)
         if self.fc_gate is None:
             y = self.fc2(self.dropout(self.activation(self.fc1(x_flat))))
         else:
@@ -117,9 +117,9 @@ def pool(
                   For example, PoolFFN(in_dim=D_fast, out_dim=D_pool, hidden_dim=..., rate=rate).
     Returns:
         out: pooled slow sequence with causal shift:
-             - compute block outputs s_k = FFN(f_{k*rate:(k+1)*rate-1}), k=0..K-1, where K = T_fast // rate.
+             - compute block outputs s_k = FFN(f_{k*rate:(k+1)*rate-1}), k=0..K-1, where K = ceil(T_fast / rate).
              - prepend a zero step and drop the last to maintain causality and keep exact length K.
-             - shape is [B, K, D_pool] if time_dim=1; time length is T_fast // rate.
+             - shape is [B, K, D_pool] if time_dim=1; time length is ceil(T_fast / rate).
     """
     # Move time axis to dim=1 for convenience
     x = f.movedim(time_dim, 1)
@@ -163,6 +163,8 @@ def pool(
         )
 
     s_blocks = pool_ffn(x_blocks)  # [B, Bk, D_pool] or [B, Bk, S, D_pool]
+    if s_blocks.dim() == 3:
+        s_blocks = s_blocks.unsqueeze(2) # change first case to [B, Bk, 1, D_pool]
     s0 = torch.zeros(b, 1, spatial_tokens, s_blocks.size(-1), dtype=x.dtype, device=x.device)
     s = torch.cat([s0, s_blocks], dim=1)  # [B, 1+Bk, S, D_pool]
     s = s[:, :-1, :, :]  # drop the last time slice to keep T//rate length
@@ -170,7 +172,7 @@ def pool(
     return s.movedim(1, time_dim)
 
 
-def pad_slow(
+def pad_for_slow(
     x: torch.Tensor,
     rate: int,
     time_dim: int = 1,
@@ -182,18 +184,18 @@ def pad_slow(
     Padding is appended along `time_dim` and repeated across spatial tokens.
     Returns the padded tensor and the number of temporal steps added.
     """
-    dim = time_dim if time_dim >= 0 else x.dim() + time_dim
+    dim = time_dim if time_dim >= 0 else x.dim() + time_dim # else: wrap around negative index
     time_len = x.size(dim)
     if time_len % spatial_tokens != 0:
-        raise ValueError("time length must be divisible by spatial_tokens.")
+        raise ValueError("'time' length must be divisible by spatial_tokens.")
     temporal_len = time_len // spatial_tokens
-    pad_steps = (-temporal_len) % rate
+    pad_steps = (-temporal_len) % rate # remainder to get to a multiple of rate
     if pad_steps == 0:
         return x, 0
     pad_len = pad_steps * spatial_tokens
     pad_shape = list(x.shape)
     pad_shape[dim] = pad_len
-    pad_tensor = x.new_full(pad_shape, pad_value)
+    pad_tensor = x.new_full(pad_shape, pad_value) # tensor with shape of x with pad_value
     return torch.cat([x, pad_tensor], dim=dim), pad_steps
 
 class SplitProcessor(nn.Module):
@@ -264,7 +266,7 @@ class SplitEncoder(nn.Module):
             f = self.encoder.encode(*args, **kwargs)
         else:
             f = self.encoder(*args, **kwargs)
-        f_pool, _ = pad_slow(
+        f_pool, _ = pad_for_slow(
             f,
             rate=self.rate,
             time_dim=self.time_dim,
@@ -279,11 +281,11 @@ class SplitEncoder(nn.Module):
         )
         return f, s
 
-class TwoLevelTransformerEncoderLayer(nn.Module):
+class TwoScaleTransformerEncoderLayer(nn.Module):
     """
-    Two-level encoder layer with 'fast' and 'slow' levels coupled by lift/pool with relative rate `rate`.
-    - Fast layer: mixed self- and cross-attention between fast sequence X_f and lift(X_s).
-    - Slow layer: mixed self- and cross-attention between slow sequence X_s and pool(X_f).
+    Two-scale encoder layer with 'fast' and 'slow' scales coupled by lift/pool with relative rate `rate`.
+    - Fast scale: mixed self- and cross-attention between fast sequence X_f and lift(X_s).
+    - Slow scale: mixed self- and cross-attention between slow sequence X_s and pool(X_f).
     Outputs (Z_f, Z_s).
     """
 
@@ -374,7 +376,7 @@ class TwoLevelTransformerEncoderLayer(nn.Module):
         """
         Args:
             x_fast: [B, L, fast_embed_dim]
-            x_slow: [B, L_slow, slow_embed_dim], with L_slow == ceil(L//rate)
+            x_slow: [B, L_slow, slow_embed_dim], with L_slow = ceil(L/rate)
             where fast_embed_dim = f_d1 + f_d2 and slow_embed_dim = s_d1 + s_d2
         Returns:
             z_fast: [B, L, fast_embed_dim]
@@ -395,7 +397,7 @@ class TwoLevelTransformerEncoderLayer(nn.Module):
             raise ValueError("Sequence lengths must be divisible by spatial_tokens.")
         fast_time = Lf // spatial_tokens
         slow_time = Ls // spatial_tokens
-        expected_slow_time = (fast_time + self.rate - 1) // self.rate
+        expected_slow_time = (fast_time - 1) // self.rate + 1 # ceil(fast_time/rate)
         if slow_time != expected_slow_time:
             raise ValueError(f"Temporal sizes mismatch: L_fast={Lf}, rate={self.rate}, but L_slow={Ls}.")
 
@@ -406,7 +408,7 @@ class TwoLevelTransformerEncoderLayer(nn.Module):
             time_dim=time_dim,
             ffn=self.lift_ffn,
             spatial_tokens=spatial_tokens,
-        )  # [B, L, D_lift]
+        )  # [B, L, f_d2 (=D_lift)]
         # lift() can include padded steps from the slow stream; trim to match fast length.
         if y_fast.size(time_dim) > Lf:
             y_fast = y_fast.narrow(time_dim, 0, Lf)
@@ -427,25 +429,25 @@ class TwoLevelTransformerEncoderLayer(nn.Module):
         slow_block_mask = _downsample_block_mask(fast_block_mask, rate=self.rate, spatial_tokens=spatial_tokens)
 
         # Slow layer:
-        x_fast_pool, _ = pad_slow(
+        x_fast_for_pool, _ = pad_for_slow(
             x_fast,
             rate=self.rate,
             time_dim=time_dim,
             spatial_tokens=spatial_tokens,
         )
         y_slow = pool(
-            x_fast_pool,
+            x_fast_for_pool,
             rate=self.rate,
             time_dim=time_dim,
             pool_ffn=self.pool_ffn,
             spatial_tokens=spatial_tokens,
-        )  # [B, L//rate, D_pool]
+        )  # [B, L_slow, s_d2 (=D_pool)]
         if y_slow.size(time_dim) != Ls:
             raise ValueError("Pooled slow length does not match slow sequence length.")
         if y_slow.size(self.split_dim) != self.s_d2:
             raise ValueError(f"pool() output dim {y_slow.size(self.split_dim)} must equal slow cross dim {self.s_d2}.")
         # MixedSplit on slow:
-        # x_slow: [B, L//rate, s_d1+s_d2], y_slow: [B, L//rate, s_d2] -> z_slow: [B, L//rate, s_d1+s_d2]
+        # x_slow: [B, L_slow, s_d1+s_d2], y_slow: [B, L_slow, s_d2] -> z_slow: [B, L_slow, s_d1+s_d2]
         z_slow = self.slow_mixer(
             x=x_slow,
             y=y_slow,
@@ -596,6 +598,8 @@ class RecombineDecoder(nn.Module):
         slow_embed_dim: int,
         rate: int,
         hidden_dim: int,
+        lift_ffn: Optional[nn.Module] = None,
+        lift_dim: Optional[int] = None,
         act: str = "gelu",
         dropout: float = 0.0,
         time_dim: int = 1,
@@ -605,7 +609,17 @@ class RecombineDecoder(nn.Module):
         self.rate = rate
         self.time_dim = time_dim
         self.spatial_tokens = spatial_tokens
-        in_dim = fast_embed_dim + slow_embed_dim
+        self.lift_ffn = lift_ffn
+        if lift_dim is None:
+            if lift_ffn is None:
+                lift_dim = slow_embed_dim
+            elif hasattr(lift_ffn, "out_features"):
+                lift_dim = lift_ffn.out_features
+            elif hasattr(lift_ffn, "out_dim"):
+                lift_dim = lift_ffn.out_dim
+            else:
+                raise ValueError("lift_ffn must expose out_features or out_dim for RecombineDecoder.")
+        in_dim = fast_embed_dim + lift_dim
         self.fc1 = nn.Linear(in_dim, hidden_dim)
         if act.endswith("glu"):
             self.fc_gate = nn.Linear(in_dim, hidden_dim)
@@ -616,11 +630,12 @@ class RecombineDecoder(nn.Module):
         self.fc2 = nn.Linear(hidden_dim, fast_embed_dim)
 
     def forward(self, z_fast: torch.Tensor, z_slow: torch.Tensor) -> torch.Tensor:
-        # Align time scales by lifting z_slow to the fast length (no FFN needed)
+        # Align time scales by lifting z_slow to the fast length
         z_slow_lift = lift(
             z_slow,
             rate=self.rate,
             time_dim=self.time_dim,
+            ffn=self.lift_ffn,
             spatial_tokens=self.spatial_tokens,
         )  # [..., L_fast, slow_embed_dim]
         if z_slow_lift.size(self.time_dim) > z_fast.size(self.time_dim):
@@ -634,16 +649,16 @@ class RecombineDecoder(nn.Module):
             y = self.fc2(self.dropout(self.activation(self.fc1(x), self.fc_gate(x))))
         return y
 
-        
+### It's probably better to separate out the encoder/decoder into multiscale_bcat.py
 class TwoLevelTransformerEncoder(nn.Module):
     """
-    Stack of TwoLevelTransformerEncoderLayer layers, mirroring CustomTransformerEncoder but
+    Stack of TwoScaleTransformerEncoderLayer layers, mirroring CustomTransformerEncoder but
     operating on coupled fast/slow streams. Applies layers sequentially and returns (fast, slow).
     """
 
     def __init__(
         self,
-        encoder_layer: TwoLevelTransformerEncoderLayer,
+        encoder_layer: TwoScaleTransformerEncoderLayer,
         num_layers: int,
         norm_fast: Optional[nn.Module] = None,
         norm_slow: Optional[nn.Module] = None,
@@ -797,8 +812,8 @@ def _downsample_mask(
 
     # Pad query/key axes to rounded-up lengths
     pad_value = True if dense.dtype == torch.bool else float("-inf")
-    dense, _ = pad_slow(dense, rate=rate, time_dim=-1, spatial_tokens=spatial_tokens, pad_value=pad_value)
-    dense, _ = pad_slow(dense, rate=rate, time_dim=-2, spatial_tokens=spatial_tokens, pad_value=pad_value)
+    dense, _ = pad_for_slow(dense, rate=rate, time_dim=-1, spatial_tokens=spatial_tokens, pad_value=pad_value)
+    dense, _ = pad_for_slow(dense, rate=rate, time_dim=-2, spatial_tokens=spatial_tokens, pad_value=pad_value)
 
     if spatial_tokens > 1:
         # dense: [*prefix, L, L], where L = t_len * spatial_tokens
@@ -922,7 +937,7 @@ if __name__ == "__main__":
         act="gelu",
         dropout=0.0,
     )
-    pool_ffn_split = PoolFFN(
+    encoder_pool_ffn = PoolFFN(
         in_dim=fast_embed_dim,
         out_dim=slow_embed_dim,
         hidden_dim=16,
@@ -932,7 +947,7 @@ if __name__ == "__main__":
     )
     lift_ffn = nn.Linear(slow_embed_dim, fast_embed_dim // 2)
 
-    layer = TwoLevelTransformerEncoderLayer(
+    layer = TwoScaleTransformerEncoderLayer(
         fast_embed_dim=fast_embed_dim,
         slow_embed_dim=slow_embed_dim,
         num_heads=num_heads,
@@ -948,7 +963,7 @@ if __name__ == "__main__":
     split_encoder = SplitEncoder(
         encoder=IdentityEncoder(),
         rate=rate,
-        pool_ffn=pool_ffn_split,
+        pool_ffn=encoder_pool_ffn,
         time_dim=1,
         spatial_tokens=spatial_tokens,
     )
@@ -957,6 +972,8 @@ if __name__ == "__main__":
         slow_embed_dim=slow_embed_dim,
         rate=rate,
         hidden_dim=16,
+        lift_ffn=lift_ffn,
+        lift_dim=fast_embed_dim // 2,
         act="gelu",
         dropout=0.0,
         time_dim=1,
@@ -1020,8 +1037,8 @@ if __name__ == "__main__":
     assert out_fast.shape == expected_fast, f"out_fast.shape={out_fast.shape}, expected={expected_fast}"
     assert out_slow.shape == expected_slow, f"out_slow.shape={out_slow.shape}, expected={expected_slow}"
 
-    print("TwoLevelTransformerEncoderLayer z_fast:", z_fast.shape)
-    print("TwoLevelTransformerEncoderLayer z_slow:", z_slow.shape)
+    print("TwoScaleTransformerEncoderLayer z_fast:", z_fast.shape)
+    print("TwoScaleTransformerEncoderLayer z_slow:", z_slow.shape)
     print("TwoLevelTransformerEncoder full output:", out_full.shape)
     print("TwoLevelTransformerEncoder out_fast:", out_fast.shape)
     print("TwoLevelTransformerEncoder out_slow:", out_slow.shape)

@@ -15,7 +15,7 @@ positional_embedding: null
 qk_norm: 1
 norm: rms # select from [layer, rms]
 activation: swiglu
-rotary: true
+rotary: 0
 
 flex_attn: 0
 kv_cache: 0
