@@ -19,7 +19,7 @@ rotary: 0
 
 flex_attn: 0
 kv_cache: 0
-rate: 4
+rate: 8
 
 patch_num: 8 #16 # for input, number of patches per dimension
 patch_num_output: ${.patch_num} # for output, number of patches per dimension

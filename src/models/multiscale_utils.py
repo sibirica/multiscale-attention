@@ -1,15 +1,6 @@
-# TO DO:
-# 0. Move embedder within RecombineDecoder
-# 1. Remove redundant pool/lifts
-# 2. Set up mask for slow/fast and fast/slow cross-attentions
-# 3. Fix residual connections
-
 from typing import Optional
-from zlib import Z_DEFAULT_STRATEGY
-
 import torch
 import torch.nn as nn
-from torch.nn.attention.flex_attention import BlockMask
 
 from einops import rearrange
 from rotary_embedding_torch import RotaryEmbedding
@@ -100,7 +91,7 @@ class PoolFFN(nn.Module):
             y = self.fc2(self.dropout(self.activation(self.fc1(x_flat), self.fc_gate(x_flat))))
         return y
 
-# double check: causality offset by rate or rate-1 (minimum you need)?
+# TO DO: double check if causality offset by rate or rate-1 (minimum you need)? --> not critical
 def pool(
     f: torch.Tensor,
     rate: int,
@@ -299,7 +290,6 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         x_fast: torch.Tensor,   # [B, L_fast, D_fast]
         x_slow: torch.Tensor,   # [B, L_slow, D_slow]
         masks: dict,
-        time_dim: int = 1,
         is_causal: bool = False,
         spatial_tokens: int = 1,
         rotary_emb=None,
@@ -526,7 +516,6 @@ class TwoScaleTransformerEncoder(nn.Module):
         self,
         *args,
         masks: dict,
-        time_dim: int = 1,
         is_causal: bool = False,
         spatial_tokens: int = 1,
         full: bool = True,
@@ -539,7 +528,6 @@ class TwoScaleTransformerEncoder(nn.Module):
         if full:
             return self.forward_full(
                 *args,
-                time_dim=time_dim,
                 masks=masks,
                 is_causal=is_causal,
                 spatial_tokens=spatial_tokens,
@@ -559,7 +547,6 @@ class TwoScaleTransformerEncoder(nn.Module):
         return self._apply_layers(
             x_fast,
             x_slow,
-            time_dim=time_dim,
             masks=masks,
             is_causal=is_causal,
             spatial_tokens=spatial_tokens,
@@ -570,7 +557,6 @@ class TwoScaleTransformerEncoder(nn.Module):
         self,
         *args,
         masks: dict,
-        time_dim: int = 1,
         is_causal: bool = False,
         spatial_tokens: int = 1,
         rotary_emb=None,
@@ -589,7 +575,6 @@ class TwoScaleTransformerEncoder(nn.Module):
         z_fast, z_slow = self._apply_layers(
             x_fast,
             x_slow,
-            time_dim=time_dim,
             masks=masks,
             is_causal=is_causal,
             spatial_tokens=spatial_tokens,
@@ -603,7 +588,6 @@ class TwoScaleTransformerEncoder(nn.Module):
         x_fast: torch.Tensor,
         x_slow: torch.Tensor,
         masks: dict,
-        time_dim: int = 1,
         is_causal: bool = False,
         spatial_tokens: int = 1,
         rotary_emb=None,
@@ -615,7 +599,6 @@ class TwoScaleTransformerEncoder(nn.Module):
             out_fast, out_slow = layer(
                 out_fast,
                 out_slow,
-                time_dim=time_dim,
                 masks=masks,
                 is_causal=is_causal,
                 spatial_tokens=spatial_tokens,
@@ -1025,7 +1008,6 @@ if __name__ == "__main__":
     z_fast, z_slow = layer(
         x_fast=x_fast,
         x_slow=x_slow,
-        time_dim=1,
         masks={
             "fast_self_attn_mask": fast_self_mask,
             "slow_self_attn_mask": slow_self_mask,
@@ -1038,7 +1020,6 @@ if __name__ == "__main__":
 
     out_full = encoder(
         x_fast,
-        time_dim=1,
         masks={
             "fast_self_attn_mask": fast_self_mask,
             "slow_self_attn_mask": slow_self_mask,
@@ -1053,7 +1034,6 @@ if __name__ == "__main__":
     out_fast, out_slow = encoder(
         x_fast,
         x_slow,
-        time_dim=1,
         masks={
             "fast_self_attn_mask": fast_self_mask,
             "slow_self_attn_mask": slow_self_mask,

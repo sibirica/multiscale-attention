@@ -223,7 +223,6 @@ class MultiscaleBCAT(nn.Module):
             embedder=self.embedder,
             rate=self.rate,
             pool_ffn=pool_ffn,
-            time_dim=1,
             spatial_tokens=config.embedder.patch_num**2,
         )
         recombine_decoder = RecombineDecoder(
@@ -235,7 +234,6 @@ class MultiscaleBCAT(nn.Module):
             lift_dim=fast_embed_dim,
             act=activation,
             dropout=config.dropout,
-            time_dim=1,
             spatial_tokens=config.embedder.patch_num**2,
             embedder=self.embedder,
         )
@@ -250,8 +248,7 @@ class MultiscaleBCAT(nn.Module):
         )
 
         self.seq_len_per_step = config.embedder.patch_num**2
-        # Precompute dense masks for the maximum fast/slow lengths.
-        # Block masks cannot be cached because generate() changes sequence length each step.
+        # Precompute dense masks for the maximum fast/slow lengths
         self.max_fast_time = max(1, max_data_len - 1)
         self.max_slow_time = (self.max_fast_time - 1) // self.rate + 1
         self.register_buffer(
