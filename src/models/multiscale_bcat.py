@@ -11,15 +11,154 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.attention.flex_attention import create_block_mask
 
 from .attention_utils import DynamicTanh
+from .bcat import block_causal
 from .embedder import get_embedder
-from .bcat import block_lower_triangular_mask, block_causal
 from .multiscale_utils import (
     PoolFFN,
     RecombineDecoder,
     SplitEncoder,
-    TwoLevelTransformerEncoder,
+    TwoScaleTransformerEncoder,
     TwoScaleTransformerEncoderLayer,
 )
+
+
+def build_self_attn_mask(
+    time_len: int,
+    spatial_tokens: int,
+    device: torch.device,
+    dtype: torch.dtype = torch.float32,
+    use_block_mask: bool = False,
+) -> torch.Tensor:
+    """
+    Build a causal self-attention mask for a sequence with spatiotemporal tokens.
+
+    Token layout is time-major: L = time_len * spatial_tokens.
+    For each time step t, all spatial tokens attend to:
+      - all spatial tokens at times t' <= t
+      - no tokens at times t' > t
+
+    When use_block_mask=True, return a BlockMask that encodes the same rule
+    in block space (block_size == spatial_tokens). Otherwise return a dense
+    float mask (0 for allowed, -inf for blocked) compatible with SDPA.
+    """
+    if use_block_mask:
+        q_len = time_len * spatial_tokens
+        return create_block_mask(
+            partial(block_causal, block_size=spatial_tokens),
+            None,
+            None,
+            q_len,
+            q_len,
+            device=device,
+        )
+    time_mask = torch.tril(torch.ones(time_len, time_len, device=device, dtype=torch.bool))
+    block = torch.ones(spatial_tokens, spatial_tokens, device=device, dtype=torch.bool)
+    allow = torch.kron(time_mask, block)
+    return _dense_mask_from_allow(allow, dtype=dtype)
+
+
+def build_fast_to_slow_mask(
+    fast_time: int,
+    slow_time: int,
+    rate: int,
+    spatial_tokens: int,
+    device: torch.device,
+    dtype: torch.dtype = torch.float32,
+    use_block_mask: bool = False,
+) -> torch.Tensor:
+    """
+    Build a causal cross-attention mask for fast queries attending to slow keys.
+
+    Mapping rule (matches cross_attn1):
+      - slow step s summarizes fast steps [s*rate, ..., (s+1)*rate-1]
+      - fast time t can attend to slow step s only if t >= (s+1)*rate - 1
+        (i.e., the slow summary is fully determined by past fast tokens)
+
+    The output shape is [L_fast, L_slow] where:
+      L_fast = fast_time * spatial_tokens
+      L_slow = slow_time * spatial_tokens
+    """
+    if use_block_mask:
+        q_len = fast_time * spatial_tokens
+        kv_len = slow_time * spatial_tokens
+        return create_block_mask(
+            partial(_block_fast_to_slow, block_size=spatial_tokens, rate=rate),
+            None,
+            None,
+            q_len,
+            kv_len,
+            device=device,
+        )
+    fast_t = torch.arange(fast_time, device=device).repeat_interleave(spatial_tokens)
+    slow_t = torch.arange(slow_time, device=device).repeat_interleave(spatial_tokens)
+    allow = (fast_t[:, None] >= ((slow_t[None, :] + 1) * rate - 1))
+    return _dense_mask_from_allow(allow, dtype=dtype)
+
+
+def build_slow_to_fast_mask(
+    fast_time: int,
+    slow_time: int,
+    rate: int,
+    spatial_tokens: int,
+    device: torch.device,
+    dtype: torch.dtype = torch.float32,
+    use_block_mask: bool = False,
+) -> torch.Tensor:
+    """
+    Build a causal cross-attention mask for slow queries attending to fast keys.
+
+    Mapping rule (matches cross_attn2):
+      - slow step s represents fast range [s*rate, ..., (s+1)*rate-1]
+      - slow step s can attend to fast time t if t >= s*rate
+        (allow contemporaneous and past fast tokens)
+
+    The output shape is [L_slow, L_fast] where:
+      L_slow = slow_time * spatial_tokens
+      L_fast = fast_time * spatial_tokens
+    """
+    if use_block_mask:
+        q_len = slow_time * spatial_tokens
+        kv_len = fast_time * spatial_tokens
+        return create_block_mask(
+            partial(_block_slow_to_fast, block_size=spatial_tokens, rate=rate),
+            None,
+            None,
+            q_len,
+            kv_len,
+            device=device,
+        )
+    fast_t = torch.arange(fast_time, device=device).repeat_interleave(spatial_tokens)
+    slow_t = torch.arange(slow_time, device=device).repeat_interleave(spatial_tokens)
+    allow = fast_t[None, :] >= (slow_t[:, None] * rate)
+    return _dense_mask_from_allow(allow, dtype=dtype)
+
+
+def _dense_mask_from_allow(allow: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """
+    Convert a boolean allow matrix into an SDPA-compatible mask.
+    True -> 0 (keep), False -> -inf (block).
+    """
+    return torch.zeros_like(allow, dtype=dtype).masked_fill(~allow, float("-inf"))
+
+
+def _block_fast_to_slow(b, h, q_idx, kv_idx, block_size: int, rate: int) -> torch.Tensor:
+    """
+    BlockMask callback for fast->slow attention.
+    q_idx and kv_idx are token indices; integer divide by block_size to get time index.
+    """
+    f_t = q_idx // block_size
+    s_t = kv_idx // block_size
+    return f_t >= ((s_t + 1) * rate - 1)
+
+
+def _block_slow_to_fast(b, h, q_idx, kv_idx, block_size: int, rate: int) -> torch.Tensor:
+    """
+    BlockMask callback for slow->fast attention.
+    q_idx and kv_idx are token indices; integer divide by block_size to get time index.
+    """
+    s_t = q_idx // block_size
+    f_t = kv_idx // block_size
+    return f_t >= (s_t * rate)
 
 
 logger = getLogger()
@@ -58,18 +197,7 @@ class MultiscaleBCAT(nn.Module):
         pool_hidden_dim = config.get("pool_dim", config.dim_ffn)
         activation = config.get("activation", "gelu")
 
-
         pool_ffn = PoolFFN(
-            in_dim=fast_embed_dim,
-            out_dim=slow_embed_dim // 2,
-            hidden_dim=pool_hidden_dim,
-            rate=self.rate,
-            act=activation,
-            dropout=config.dropout,
-        )
-
-        # needs better name - embedding into slow layer
-        encoder_pool_ffn = PoolFFN(
             in_dim=embedder_dim,
             out_dim=slow_embed_dim,
             hidden_dim=pool_hidden_dim,
@@ -77,24 +205,24 @@ class MultiscaleBCAT(nn.Module):
             act=activation,
             dropout=config.dropout,
         )
-        lift_ffn = nn.Linear(slow_embed_dim, fast_embed_dim // 2)
+        lift_ffn = nn.Linear(slow_embed_dim, fast_embed_dim)
 
         encoder_layer = TwoScaleTransformerEncoderLayer(
             fast_embed_dim=fast_embed_dim,
             slow_embed_dim=slow_embed_dim,
             num_heads=config.n_head,
             rate=self.rate,
-            pool_ffn=pool_ffn,
-            lift_ffn=lift_ffn,
+            dim_ffn=config.dim_ffn,
             dropout=config.dropout,
+            act=activation,
             bias=True,
             qk_norm=config.get("qk_norm", False),
             flex_attn=self.flex_attn,
         )
         split_encoder = SplitEncoder(
-            encoder=self.embedder,
+            embedder=self.embedder,
             rate=self.rate,
-            pool_ffn=encoder_pool_ffn,
+            pool_ffn=pool_ffn,
             time_dim=1,
             spatial_tokens=config.embedder.patch_num**2,
         )
@@ -104,13 +232,14 @@ class MultiscaleBCAT(nn.Module):
             rate=self.rate,
             hidden_dim=recombine_hidden_dim,
             lift_ffn=lift_ffn,
-            lift_dim=fast_embed_dim // 2,
+            lift_dim=fast_embed_dim,
             act=activation,
             dropout=config.dropout,
             time_dim=1,
             spatial_tokens=config.embedder.patch_num**2,
+            embedder=self.embedder,
         )
-        self.transformer = TwoLevelTransformerEncoder(
+        self.transformer = TwoScaleTransformerEncoder(
             encoder_layer=encoder_layer,
             num_layers=config.n_layer,
             norm_fast=norm(fast_embed_dim, eps=1e-5) if config.norm_first else None,
@@ -121,28 +250,128 @@ class MultiscaleBCAT(nn.Module):
         )
 
         self.seq_len_per_step = config.embedder.patch_num**2
-        mask = block_lower_triangular_mask(self.seq_len_per_step, max_data_len, use_float=True)
-        self.register_buffer("mask", mask, persistent=False)
-
-        if self.flex_attn:
-            block_size = config.patch_num**2
-            seq_len = block_size * (max_data_len - 1)
-            self.block_mask = create_block_mask(
-                partial(block_causal, block_size=block_size),
-                None, None, seq_len, seq_len
-            )
-            self.block_size = block_size
+        # Precompute dense masks for the maximum fast/slow lengths.
+        # Block masks cannot be cached because generate() changes sequence length each step.
+        self.max_fast_time = max(1, max_data_len - 1)
+        self.max_slow_time = (self.max_fast_time - 1) // self.rate + 1
+        self.register_buffer(
+            "fast_self_mask_full",
+            build_self_attn_mask(
+                self.max_fast_time,
+                self.seq_len_per_step,
+                device=torch.device("cpu"),
+                dtype=torch.float32,
+                use_block_mask=False,
+            ),
+            persistent=False,
+        )
+        self.register_buffer(
+            "slow_self_mask_full",
+            build_self_attn_mask(
+                self.max_slow_time,
+                self.seq_len_per_step,
+                device=torch.device("cpu"),
+                dtype=torch.float32,
+                use_block_mask=False,
+            ),
+            persistent=False,
+        )
+        self.register_buffer(
+            "fast_to_slow_mask_full",
+            build_fast_to_slow_mask(
+                self.max_fast_time,
+                self.max_slow_time,
+                self.rate,
+                self.seq_len_per_step,
+                device=torch.device("cpu"),
+                dtype=torch.float32,
+                use_block_mask=False,
+            ),
+            persistent=False,
+        )
+        self.register_buffer(
+            "slow_to_fast_mask_full",
+            build_slow_to_fast_mask(
+                self.max_fast_time,
+                self.max_slow_time,
+                self.rate,
+                self.seq_len_per_step,
+                device=torch.device("cpu"),
+                dtype=torch.float32,
+                use_block_mask=False,
+            ),
+            persistent=False,
+        )
 
     def summary(self):
         s = "\n"
-        s += f"\tEmbedder:        {sum([p.numel() for p in self.embedder.parameters() if p.requires_grad]):,}\n"
+        s += f"\tEncoder:        {sum([p.numel() for p in self.transformer.split_encoder.parameters() if p.requires_grad]):,}\n"
         s += f"\tTransformer:    {sum([p.numel() for p in self.transformer.parameters() if p.requires_grad]):,}"
         if self.transformer.recombine_decoder is not None:
             s += (
-                f"\tRecombine:      "
+                f"\tDecoder:      "
                 f"{sum([p.numel() for p in self.transformer.recombine_decoder.parameters() if p.requires_grad]):,}"
             )
         return s
+
+    def _build_masks(
+        self,
+        fast_time: int,
+        slow_time: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> dict:
+        use_block_mask = self.flex_attn
+        if use_block_mask:
+            fast_self_mask = build_self_attn_mask(
+                fast_time, self.seq_len_per_step, device=device, use_block_mask=True
+            )
+            slow_self_mask = build_self_attn_mask(
+                slow_time, self.seq_len_per_step, device=device, use_block_mask=True
+            )
+            fast_to_slow_mask = build_fast_to_slow_mask(
+                fast_time,
+                slow_time,
+                self.rate,
+                self.seq_len_per_step,
+                device=device,
+                use_block_mask=True,
+            )
+            slow_to_fast_mask = build_slow_to_fast_mask(
+                fast_time,
+                slow_time,
+                self.rate,
+                self.seq_len_per_step,
+                device=device,
+                use_block_mask=True,
+            )
+            return {
+                "fast_self_attn_mask": None,
+                "slow_self_attn_mask": None,
+                "fast_to_slow_attn_mask": None,
+                "slow_to_fast_attn_mask": None,
+                "fast_block_mask": fast_self_mask,
+                "slow_block_mask": slow_self_mask,
+                "fast_to_slow_block_mask": fast_to_slow_mask,
+                "slow_to_fast_block_mask": slow_to_fast_mask,
+            }
+
+        fast_len = fast_time * self.seq_len_per_step
+        slow_len = slow_time * self.seq_len_per_step
+        return {
+            "fast_self_attn_mask": self.fast_self_mask_full[:fast_len, :fast_len].to(dtype=dtype, device=device),
+            "slow_self_attn_mask": self.slow_self_mask_full[:slow_len, :slow_len].to(dtype=dtype, device=device),
+            "fast_to_slow_attn_mask": self.fast_to_slow_mask_full[:fast_len, :slow_len].to(
+                dtype=dtype, device=device
+            ),
+            "slow_to_fast_attn_mask": self.slow_to_fast_mask_full[:slow_len, :fast_len].to(
+                dtype=dtype, device=device
+            ),
+            "fast_block_mask": None,
+            "slow_block_mask": None,
+            "fast_to_slow_block_mask": None,
+            "slow_to_fast_block_mask": None,
+        }
 
     def forward(self, mode, **kwargs):
         """
@@ -174,32 +403,29 @@ class MultiscaleBCAT(nn.Module):
             data_input (bs, t_num-1, x_num, x_num, data_dim) -> (bs, data_len, dim)
                        data_len = (input_len + output_len - 1) * patch_num * patch_num
         """
-        data_len = data.size(1) * self.seq_len_per_step
+        fast_time = data.size(1)
+        slow_time = (fast_time - 1) // self.rate + 1
 
         """
         Step 2: Transformer
             data_input:   Tensor     (bs, data_len, dim)
         """
+        masks = self._build_masks(fast_time, slow_time, device=data.device, dtype=data.dtype)
         if self.flex_attn:
-            block_mask = create_block_mask(
-                partial(block_causal, block_size=self.block_size),
-                None, None, data_len, data_len, device=data.device
-            )
             data_encoded = self.transformer(
                 data=data,
                 times=times,
-                fast_block_mask=block_mask,
+                masks=masks,
                 is_causal=False,
                 spatial_tokens=self.seq_len_per_step,
                 full=True,
             )
         else:
-            mask = self.mask[:data_len, :data_len]
             with sdpa_kernel(SDPBackend.CUDNN_ATTENTION):
                 data_encoded = self.transformer(
                     data=data,
                     times=times,
-                    fast_attn_mask=mask,
+                    masks=masks,
                     is_causal=False,
                     spatial_tokens=self.seq_len_per_step,
                     full=True,
@@ -208,9 +434,7 @@ class MultiscaleBCAT(nn.Module):
         """
         Step 3: Decode data
         """
-        input_seq_len = (input_len - 1) * self.seq_len_per_step
-        data_output = data_encoded[:, input_seq_len:]  # (bs, output_len*patch_num*patch_num, dim)
-        data_output = self.embedder.decode(data_output)  # (bs, output_len, x_num, x_num, data_dim)
+        data_output = data_encoded[:, input_len - 1 :]
         return data_output
 
     @torch.compiler.disable()
@@ -245,39 +469,26 @@ class MultiscaleBCAT(nn.Module):
             block_len = min(step_len, remaining)
             cur_data_input = data_all[:, :cur_len]  # (bs, cur_len, x_num, x_num, data_dim)
 
-            mask = block_mask = None
-            if self.flex_attn:
-                data_len = cur_len * self.seq_len_per_step
-                block_mask = create_block_mask(
-                    partial(block_causal, block_size=self.block_size),
-                    None, None, data_len, data_len, device=cur_data_input.device
-                )
-            else:
-                data_len = cur_len * self.seq_len_per_step
-                mask = self.mask[:data_len, :data_len]
+            fast_time = cur_len
+            slow_time = (fast_time - 1) // self.rate + 1
+            masks = self._build_masks(
+                fast_time,
+                slow_time,
+                device=cur_data_input.device,
+                dtype=cur_data_input.dtype,
+            )
 
-            if self.flex_attn:
-                cur_data_encoded = self.transformer(
+            # does this need SDPA kernel line?
+            cur_data_encoded = self.transformer(
                     data=cur_data_input,
                     times=times[:, :cur_len],
-                    fast_block_mask=block_mask,
+                    masks=masks,
                     is_causal=False,
                     spatial_tokens=self.seq_len_per_step,
                     full=True,
-                )
-            else:
-                cur_data_encoded = self.transformer(
-                    data=cur_data_input,
-                    times=times[:, :cur_len],
-                    fast_attn_mask=mask,
-                    is_causal=False,
-                    spatial_tokens=self.seq_len_per_step,
-                    full=True,
-                )
+            )
 
-            new_tokens = block_len * self.seq_len_per_step
-            new_output = cur_data_encoded[:, -new_tokens:]  # (bs, block_len*patch_num*patch_num, dim)
-            new_output = self.embedder.decode(new_output)  # (bs, block_len, x_num, x_num, data_dim)
+            new_output = cur_data_encoded[:, -block_len:]  # (bs, block_len, x_num, x_num, data_dim)
             new_output = new_output * data_mask  # (bs, block_len, x_num, x_num, data_dim)
 
             if carry_over_c >= 0:

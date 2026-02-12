@@ -1,5 +1,5 @@
 # run only MultiscaleBCAT without ablation tests
-expid=multiscale_bcat_5
+expid=multiscale_bcat_8
 python main.py exp_id=${expid} batch_size=16 data=fluids_arena compile=1 optim=adamw model=multiscale_bcat model.flex_attn=1 #dryrun=1
 #python main.py eval_only=1 use_wandb=0 exp_name=eval eval_from_exp=checkpoint/bcat/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=16 model=multiscale_bcat model.flex_attn=1
 #python main.py eval_only=1 use_wandb=0 exp_name=eval eval_from_exp=checkpoint/bcat/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=16 model=multiscale_bcat model.flex_attn=1 overfit_test=1

@@ -1,4 +1,11 @@
+# TO DO:
+# 0. Move embedder within RecombineDecoder
+# 1. Remove redundant pool/lifts
+# 2. Set up mask for slow/fast and fast/slow cross-attentions
+# 3. Fix residual connections
+
 from typing import Optional
+from zlib import Z_DEFAULT_STRATEGY
 
 import torch
 import torch.nn as nn
@@ -6,7 +13,7 @@ from torch.nn.attention.flex_attention import BlockMask
 
 from einops import rearrange
 from rotary_embedding_torch import RotaryEmbedding
-from .attention_utils import get_activation, MultiheadAttention, MultiheadFlexAttention, _get_clones
+from .attention_utils import FFN, get_activation, MultiheadAttention, MultiheadFlexAttention, _get_clones
 
 def lift(
     s: torch.Tensor,
@@ -93,11 +100,12 @@ class PoolFFN(nn.Module):
             y = self.fc2(self.dropout(self.activation(self.fc1(x_flat), self.fc_gate(x_flat))))
         return y
 
+# double check: causality offset by rate or rate-1 (minimum you need)?
 def pool(
     f: torch.Tensor,
     rate: int,
     time_dim: int = 1,
-    pool_ffn: Optional[nn.Module] = None,
+    pool_ffn: Optional[PoolFFN] = None,
     spatial_tokens: int = 1,
 ) -> torch.Tensor:
     """
@@ -167,7 +175,7 @@ def pool(
         s_blocks = s_blocks.unsqueeze(2) # change first case to [B, Bk, 1, D_pool]
     s0 = torch.zeros(b, 1, spatial_tokens, s_blocks.size(-1), dtype=x.dtype, device=x.device)
     s = torch.cat([s0, s_blocks], dim=1)  # [B, 1+Bk, S, D_pool]
-    s = s[:, :-1, :, :]  # drop the last time slice to keep T//rate length
+    s = s[:, :-1, :, :]  # drop the last time slice to keep ceil(T/rate) length <--- TO DO: CHECK THIS
     s = rearrange(s, "b t s d -> b (t s) d")
     return s.movedim(1, time_dim)
 
@@ -198,74 +206,29 @@ def pad_for_slow(
     pad_tensor = x.new_full(pad_shape, pad_value) # tensor with shape of x with pad_value
     return torch.cat([x, pad_tensor], dim=dim), pad_steps
 
-class SplitProcessor(nn.Module):
-    """
-    Split a dimension of a tensor into two parts, process each part with its own module,
-    and concatenate the results back along the same dimension.
-    Split evenly by default, custom split sizes via split_sizes param.
-    """
-
-    def __init__(
-        self,
-        branch1: nn.Module,
-        branch2: nn.Module,
-        split_dim: int = -1,
-        split_sizes: Optional[tuple[int, int]] = None,
-        cat_dim: int = -1,
-    ) -> None:
-        super().__init__()
-        self.branch1 = branch1
-        self.branch2 = branch2
-        self.split_dim = split_dim
-        self.split_sizes = split_sizes
-
-    def forward(self, x: torch.Tensor, kw1: Optional[dict] = None, kw2: Optional[dict] = None) -> torch.Tensor:
-        kw1 = kw1 or {}
-        kw2 = kw2 or {}
-        feature_dim = x.size(self.split_dim)
-        if self.split_sizes is None:
-            if feature_dim % 2 != 0:
-                raise ValueError("Even split requested but split dim size is not divisible by 2.")
-            split_sizes = (feature_dim // 2, feature_dim // 2)
-        else:
-            if sum(self.split_sizes) != feature_dim:
-                raise ValueError(
-                    f"split_sizes {self.split_sizes} must sum to split dim size {feature_dim}."
-                )
-            split_sizes = self.split_sizes
-
-        x1, x2 = torch.split(x, split_sizes, dim=self.split_dim)
-        y1 = self.branch1(x1, **kw1)
-        y2 = self.branch2(x2, **kw2)
-        return y1, y2
-        #return torch.cat([y1, y2], dim=self.split_dim)
-
 class SplitEncoder(nn.Module):
     """
-    Wrapper that first computes a 'fast' tensor via the provided encoder,
-    then pools it to a 'slow' tensor using pool(). Returns (fast, slow).
+    Wrapper that computes a fast embedding via the embedder,
+    then pools it to a slow embedding. Returns (fast, slow).
     """
 
     def __init__(
         self,
-        encoder: nn.Module,
+        embedder: nn.Module,
         rate: int,
         pool_ffn: nn.Module,
         time_dim: int = 1,
         spatial_tokens: int = 1,
     ) -> None:
         super().__init__()
-        self.encoder = encoder
+        self.embedder = embedder
         self.rate = rate
         self.pool_ffn = pool_ffn
         self.time_dim = time_dim
         self.spatial_tokens = spatial_tokens
 
     def forward(self, *args, **kwargs) -> tuple[torch.Tensor, torch.Tensor]:
-        if hasattr(self.encoder, "encode"):
-            f = self.encoder.encode(*args, **kwargs)
-        else:
-            f = self.encoder(*args, **kwargs)
+        f = self.embedder.encode(*args, **kwargs)
         f_pool, _ = pad_for_slow(
             f,
             rate=self.rate,
@@ -283,10 +246,7 @@ class SplitEncoder(nn.Module):
 
 class TwoScaleTransformerEncoderLayer(nn.Module):
     """
-    Two-scale encoder layer with 'fast' and 'slow' scales coupled by lift/pool with relative rate `rate`.
-    - Fast scale: mixed self- and cross-attention between fast sequence X_f and lift(X_s).
-    - Slow scale: mixed self- and cross-attention between slow sequence X_s and pool(X_f).
-    Outputs (Z_f, Z_s).
+    Two-scale encoder layer with separate self- and cross-attention.
     """
 
     def __init__(
@@ -295,92 +255,64 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         slow_embed_dim: int,
         num_heads: int,
         rate: int,
-        pool_ffn: nn.Module,
-        lift_ffn: nn.Module,
-        fast_split_sizes: Optional[tuple[int, int]] = None,
-        slow_split_sizes: Optional[tuple[int, int]] = None,
-        split_dim: int = -1,
+        dim_ffn: int,
         dropout: float = 0.0,
+        act: str = "gelu",
         bias: bool = True,
         qk_norm: bool = False,
         flex_attn: bool = False,
+        norm: type[nn.Module] = nn.LayerNorm,
     ) -> None:
         super().__init__()
         self.fast_embed_dim = fast_embed_dim
         self.slow_embed_dim = slow_embed_dim
         self.rate = rate
-        self.split_dim = split_dim
-        self.pool_ffn = pool_ffn
-        self.lift_ffn = lift_ffn
 
-        # Determine split sizes per level (d1=self branch, d2=cross branch)
-        if fast_split_sizes is None:
-            if fast_embed_dim % 2 != 0:
-                raise ValueError("fast_embed_dim must be even when fast_split_sizes is None.")
-            f_d1 = f_d2 = fast_embed_dim // 2
-        else:
-            if sum(fast_split_sizes) != fast_embed_dim:
-                raise ValueError("sum(fast_split_sizes) must equal fast_embed_dim.")
-            f_d1, f_d2 = fast_split_sizes
+        if fast_embed_dim != slow_embed_dim:
+            raise ValueError("Cross-attention requires fast_embed_dim == slow_embed_dim.")
 
-        if slow_split_sizes is None:
-            if slow_embed_dim % 2 != 0:
-                raise ValueError("slow_embed_dim must be even when slow_split_sizes is None.")
-            s_d1 = s_d2 = slow_embed_dim // 2
-        else:
-            if sum(slow_split_sizes) != slow_embed_dim:
-                raise ValueError("sum(slow_split_sizes) must equal slow_embed_dim.")
-            s_d1, s_d2 = slow_split_sizes
-
-        # Cross-channel dims must match for coupling
-        if f_d2 != s_d2:
-            raise ValueError(f"Cross-branch dims must match: fast d2={f_d2}, slow d2={s_d2}.")
-
-        self.f_d1, self.f_d2 = f_d1, f_d2
-        self.s_d1, self.s_d2 = s_d1, s_d2
-
-        # Fast mixer: operates on fast sequence, cross to lifted slow (feature size must be s_d2 == f_d2)
-        self.fast_mixer = MixedSplitAttention(
-            embed_dim=fast_embed_dim,
-            num_heads=num_heads,
-            dropout=dropout,
-            bias=bias,
-            qk_norm=qk_norm,
-            split_dim=split_dim,
-            split_sizes=(f_d1, f_d2),
-            flex_attn=flex_attn,
+        SelfMHA = MultiheadFlexAttention if flex_attn else MultiheadAttention
+        CrossMHA = MultiheadFlexAttention if flex_attn else MultiheadAttention
+        self.self_attn_fast = SelfMHA(
+            fast_embed_dim, num_heads=num_heads, dropout=dropout, bias=bias, qk_norm=qk_norm
         )
-        # Slow mixer: operates on slow sequence, cross to pooled fast (feature size must be f_d2 == s_d2)
-        self.slow_mixer = MixedSplitAttention(
-            embed_dim=slow_embed_dim,
-            num_heads=num_heads,
-            dropout=dropout,
-            bias=bias,
-            qk_norm=qk_norm,
-            split_dim=split_dim,
-            split_sizes=(s_d1, s_d2),
-            flex_attn=flex_attn,
+        self.self_attn_slow = SelfMHA(
+            slow_embed_dim, num_heads=num_heads, dropout=dropout, bias=bias, qk_norm=qk_norm
         )
+        self.cross_attn_fast = CrossMHA(
+            fast_embed_dim, num_heads=num_heads, dropout=dropout, bias=bias, qk_norm=qk_norm
+        )
+        self.cross_attn_slow = CrossMHA(
+            slow_embed_dim, num_heads=num_heads, dropout=dropout, bias=bias, qk_norm=qk_norm
+        )
+
+        self.norm_fast_attn = norm(fast_embed_dim)
+        self.norm_slow_attn = norm(slow_embed_dim)
+        self.norm_fast_ffn = norm(fast_embed_dim)
+        self.norm_slow_ffn = norm(slow_embed_dim)
+
+        self.ffn_fast = FFN(fast_embed_dim, dim_ffn, act=act, dropout=dropout)
+        self.ffn_slow = FFN(slow_embed_dim, dim_ffn, act=act, dropout=dropout)
 
     def forward(
         self,
-        x_fast: torch.Tensor,   # [B, L, D_fast]
-        x_slow: torch.Tensor,   # [B, L//rate, D_slow]
+        x_fast: torch.Tensor,   # [B, L_fast, D_fast]
+        x_slow: torch.Tensor,   # [B, L_slow, D_slow]
+        masks: dict,
         time_dim: int = 1,
-        fast_attn_mask=None,
-        fast_block_mask=None,
         is_causal: bool = False,
         spatial_tokens: int = 1,
         rotary_emb=None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Args:
-            x_fast: [B, L, fast_embed_dim]
-            x_slow: [B, L_slow, slow_embed_dim], with L_slow = ceil(L/rate)
-            where fast_embed_dim = f_d1 + f_d2 and slow_embed_dim = s_d1 + s_d2
-        Returns:
-            z_fast: [B, L, fast_embed_dim]
-            z_slow: [B, L_slow, slow_embed_dim]
+        Fast/slow attention block with residuals.
+        Shapes:
+          x_fast: [B, L_fast, D_fast], where L_fast = T_fast * spatial_tokens
+          x_slow: [B, L_slow, D_slow], where L_slow = T_slow * spatial_tokens
+          T_slow = ceil(T_fast / rate)
+        Mask dict:
+          attn_* entries are dense masks (float or bool) for SDPA
+          block_* entries are BlockMask objects for flex attention
         """
         Bf, Lf, Df = x_fast.shape[0], x_fast.shape[1], x_fast.shape[-1]
         Bs, Ls, Ds = x_slow.shape[0], x_slow.shape[1], x_slow.shape[-1]
@@ -392,7 +324,6 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
             raise ValueError(f"Fast feature dim must equal fast_embed_dim={self.fast_embed_dim}: got {Df}.")
         if Ds != self.slow_embed_dim:
             raise ValueError(f"Slow feature dim must equal slow_embed_dim={self.slow_embed_dim}: got {Ds}.")
-
         if Lf % spatial_tokens != 0 or Ls % spatial_tokens != 0:
             raise ValueError("Sequence lengths must be divisible by spatial_tokens.")
         fast_time = Lf // spatial_tokens
@@ -401,190 +332,97 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         if slow_time != expected_slow_time:
             raise ValueError(f"Temporal sizes mismatch: L_fast={Lf}, rate={self.rate}, but L_slow={Ls}.")
 
-        # Fast layer:
-        y_fast = lift(
-            x_slow,
-            rate=self.rate,
-            time_dim=time_dim,
-            ffn=self.lift_ffn,
-            spatial_tokens=spatial_tokens,
-        )  # [B, L, f_d2 (=D_lift)]
-        # lift() can include padded steps from the slow stream; trim to match fast length.
-        if y_fast.size(time_dim) > Lf:
-            y_fast = y_fast.narrow(time_dim, 0, Lf)
-        if y_fast.size(self.split_dim) != self.f_d2:
-            raise ValueError(f"lift() output dim {y_fast.size(self.split_dim)} must equal fast cross dim {self.f_d2}.")
-        # MixedSplit on fast:
-        # x_fast: [B, L, f_d1+f_d2], y_fast: [B, L, f_d2] -> z_fast: [B, L, f_d1+f_d2]
-        z_fast = self.fast_mixer(
-            x=x_fast,
-            y=y_fast,
-            attn_mask=fast_attn_mask,
-            block_mask=fast_block_mask,
+        # Residual for attention block
+        x_f_res = x_fast
+        x_s_res = x_slow
+
+        # Pre-norm inputs for attention
+        x_f = self.norm_fast_attn(x_fast)
+        x_s = self.norm_slow_attn(x_slow)
+
+        # Expected keys:
+        # Either:
+        #   fast_self_attn_mask: [L_fast, L_fast]
+        #   slow_self_attn_mask: [L_slow, L_slow]
+        #   fast_to_slow_attn_mask: [L_fast, L_slow]
+        #   slow_to_fast_attn_mask: [L_slow, L_fast]
+        # Or:
+        #   fast_block_mask: BlockMask(L_fast, L_fast)
+        #   slow_block_mask: BlockMask(L_slow, L_slow)
+        #   fast_to_slow_block_mask: BlockMask(L_fast, L_slow)
+        #   slow_to_fast_block_mask: BlockMask(L_slow, L_fast)
+        # masks is required and should contain the keys documented above
+        # Self attention (causal on each stream) + cross attention (paired stream)
+        # z_f1, z_f2: [B, L_fast, D_fast], z_s1, z_s2: [B, L_slow, D_slow]
+        z_f1, z_f2 = self._apply_self_cross(
+            x=x_f,
+            y=x_s,
+            self_attn=self.self_attn_fast,
+            cross_attn=self.cross_attn_fast,
+            masks=masks,
+            self_attn_mask_key="fast_self_attn_mask",
+            self_block_mask_key="fast_block_mask",
+            cross_attn_mask_key="fast_to_slow_attn_mask",
+            cross_block_mask_key="fast_to_slow_block_mask",
+            is_causal=is_causal,
+            rotary_emb=rotary_emb,
+        )
+        z_s1, z_s2 = self._apply_self_cross(
+            x=x_s,
+            y=x_f,
+            self_attn=self.self_attn_slow,
+            cross_attn=self.cross_attn_slow,
+            masks=masks,
+            self_attn_mask_key="slow_self_attn_mask",
+            self_block_mask_key="slow_block_mask",
+            cross_attn_mask_key="slow_to_fast_attn_mask",
+            cross_block_mask_key="slow_to_fast_block_mask",
             is_causal=is_causal,
             rotary_emb=rotary_emb,
         )
 
-        slow_attn_mask = _downsample_attn_mask(fast_attn_mask, rate=self.rate, spatial_tokens=spatial_tokens)
-        slow_block_mask = _downsample_block_mask(fast_block_mask, rate=self.rate, spatial_tokens=spatial_tokens)
+        # Residual add for attention outputs
+        x_fast = x_f_res + z_f1 + z_f2
+        x_slow = x_s_res + z_s1 + z_s2
 
-        # Slow layer:
-        x_fast_for_pool, _ = pad_for_slow(
-            x_fast,
-            rate=self.rate,
-            time_dim=time_dim,
-            spatial_tokens=spatial_tokens,
-        )
-        y_slow = pool(
-            x_fast_for_pool,
-            rate=self.rate,
-            time_dim=time_dim,
-            pool_ffn=self.pool_ffn,
-            spatial_tokens=spatial_tokens,
-        )  # [B, L_slow, s_d2 (=D_pool)]
-        if y_slow.size(time_dim) != Ls:
-            raise ValueError("Pooled slow length does not match slow sequence length.")
-        if y_slow.size(self.split_dim) != self.s_d2:
-            raise ValueError(f"pool() output dim {y_slow.size(self.split_dim)} must equal slow cross dim {self.s_d2}.")
-        # MixedSplit on slow:
-        # x_slow: [B, L_slow, s_d1+s_d2], y_slow: [B, L_slow, s_d2] -> z_slow: [B, L_slow, s_d1+s_d2]
-        z_slow = self.slow_mixer(
-            x=x_slow,
-            y=y_slow,
-            attn_mask=slow_attn_mask,
-            block_mask=slow_block_mask,
-            is_causal=is_causal,
-            rotary_emb=rotary_emb,
-        )
-        return z_fast, z_slow
+        # FFN with residual (per stream)
+        x_fast = x_fast + self.ffn_fast(self.norm_fast_ffn(x_fast))
+        x_slow = x_slow + self.ffn_slow(self.norm_slow_ffn(x_slow))
+        return x_fast, x_slow
 
-class _SelfAttnBranch(nn.Module):
-    def __init__(self, mha: nn.Module):
-        super().__init__()
-        self.mha = mha
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        key_padding_mask=None,
-        attn_mask=None,
-        block_mask=None,
-        is_causal: bool = False,
-        rotary_emb=None,
-    ) -> torch.Tensor:
-        return self.mha(
-            x,
-            x,
-            x,
-            key_padding_mask=key_padding_mask,
-            attn_mask=attn_mask,
-            block_mask=block_mask,
-            is_causal=is_causal,
-            rotary_emb=rotary_emb,
-        )
-
-class _CrossAttnBranch(nn.Module):
-    def __init__(self, mha: nn.Module):
-        super().__init__()
-        self.mha = mha
-
-    def forward(
+    def _apply_self_cross(
         self,
         x: torch.Tensor,
         y: torch.Tensor,
-        y_key_padding_mask=None,
-        attn_mask=None,
-        block_mask=None,
-        is_causal: bool = False,
+        self_attn: nn.Module,
+        cross_attn: nn.Module,
+        masks: dict,
+        self_attn_mask_key: str,
+        self_block_mask_key: str,
+        cross_attn_mask_key: str,
+        cross_block_mask_key: str,
+        is_causal: bool,
         rotary_emb=None,
-    ) -> torch.Tensor:
-        return self.mha(
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        z_self = self_attn(
+            x,
+            x,
+            x,
+            attn_mask=masks.get(self_attn_mask_key),
+            block_mask=masks.get(self_block_mask_key),
+            is_causal=is_causal,
+            rotary_emb=rotary_emb,
+        )
+        z_cross = cross_attn(
             x,
             y,
             y,
-            key_padding_mask=y_key_padding_mask,
-            attn_mask=attn_mask,
-            block_mask=block_mask,
+            attn_mask=masks.get(cross_attn_mask_key),
+            block_mask=masks.get(cross_block_mask_key),
             is_causal=is_causal,
             rotary_emb=rotary_emb,
         )
-
-class MixedSplitAttention(nn.Module):
-    """
-    Mixed self- and cross-attention on split features:
-      - First half attends to itself (self-attention on x_1).
-      - Second half attends to y (cross-attention from x_2 -> y_2).
-    """
-
-    def __init__(
-        self,
-        embed_dim: int,
-        num_heads: int,
-        dropout: float = 0.0,
-        bias: bool = True,
-        qk_norm: bool = False,
-        split_dim: int = -1,
-        split_sizes: Optional[tuple[int, int]] = None,
-        flex_attn: bool = False,
-    ):
-        super().__init__()
-        self.split_dim = split_dim
-        self.split_sizes = split_sizes
-        self.flex_attn = flex_attn
-
-        if split_sizes is None:
-            if embed_dim % 2 != 0:
-                raise ValueError("embed_dim must be even for equal split when split_sizes is None.")
-            d1 = d2 = embed_dim // 2
-        else:
-            if sum(split_sizes) != embed_dim:
-                raise ValueError("sum(split_sizes) must equal embed_dim.")
-            d1, d2 = split_sizes
-
-        self.d1 = d1
-        self.d2 = d2
-
-        MHA = MultiheadFlexAttention if flex_attn else MultiheadAttention
-        self.self_branch = _SelfAttnBranch(MHA(d1, num_heads=num_heads, dropout=dropout, bias=bias, qk_norm=qk_norm))
-        self.cross_branch = _CrossAttnBranch(MHA(d2, num_heads=num_heads, dropout=dropout, bias=bias, qk_norm=qk_norm))
-        self.split_processor = SplitProcessor(self.self_branch, self.cross_branch, split_dim=split_dim, split_sizes=(d1, d2))
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        y: torch.Tensor,
-        x_key_padding_mask=None,
-        y_key_padding_mask=None,
-        attn_mask=None,
-        block_mask=None,
-        is_causal: bool = False,
-        rotary_emb=None,
-    ) -> torch.Tensor:
-        # Ensure y has the correct feature size for cross branch
-        if y.size(self.split_dim) != self.d2:
-            raise ValueError(f"y feature dim ({y.size(self.split_dim)}) must equal cross-branch dim ({self.d2}).")
-
-        # Build per-branch kwargs; execute via SplitProcessor
-        kw1 = dict(
-            key_padding_mask=x_key_padding_mask,
-            attn_mask=attn_mask,
-            block_mask=block_mask,
-            is_causal=is_causal,
-            rotary_emb=rotary_emb,
-        )
-        kw2 = dict(
-            y=y,
-            y_key_padding_mask=y_key_padding_mask,
-            attn_mask=attn_mask,
-            block_mask=block_mask,
-            is_causal=is_causal,
-            rotary_emb=rotary_emb,
-        )
-        out = self.split_processor(x, kw1=kw1, kw2=kw2)
-        if isinstance(out, tuple) and len(out) == 2:
-            y1, y2 = out
-            return torch.cat([y1, y2], dim=self.split_dim)
-        return out
+        return z_self, z_cross
  
 class RecombineDecoder(nn.Module):
     """
@@ -598,6 +436,7 @@ class RecombineDecoder(nn.Module):
         slow_embed_dim: int,
         rate: int,
         hidden_dim: int,
+        embedder: nn.Module,
         lift_ffn: Optional[nn.Module] = None,
         lift_dim: Optional[int] = None,
         act: str = "gelu",
@@ -610,6 +449,7 @@ class RecombineDecoder(nn.Module):
         self.time_dim = time_dim
         self.spatial_tokens = spatial_tokens
         self.lift_ffn = lift_ffn
+        self.embedder = embedder
         if lift_dim is None:
             if lift_ffn is None:
                 lift_dim = slow_embed_dim
@@ -617,8 +457,6 @@ class RecombineDecoder(nn.Module):
                 lift_dim = lift_ffn.out_features
             elif hasattr(lift_ffn, "out_dim"):
                 lift_dim = lift_ffn.out_dim
-            else:
-                raise ValueError("lift_ffn must expose out_features or out_dim for RecombineDecoder.")
         in_dim = fast_embed_dim + lift_dim
         self.fc1 = nn.Linear(in_dim, hidden_dim)
         if act.endswith("glu"):
@@ -628,6 +466,8 @@ class RecombineDecoder(nn.Module):
         self.activation = get_activation(act)()
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.fc2 = nn.Linear(hidden_dim, fast_embed_dim)
+        #self.norm_fast = nn.LayerNorm(fast_embed_dim)
+        self.norm_fast = nn.LayerNorm(in_dim)
 
     def forward(self, z_fast: torch.Tensor, z_slow: torch.Tensor) -> torch.Tensor:
         # Align time scales by lifting z_slow to the fast length
@@ -643,14 +483,15 @@ class RecombineDecoder(nn.Module):
         if z_slow_lift.size(self.time_dim) != z_fast.size(self.time_dim):
             raise ValueError("RecombineDecoder: time dimensions do not match after lift().")
         x = torch.cat([z_fast, z_slow_lift], dim=-1)
+        #z_fast_res = self.norm_fast(z_fast)
+        x = self.norm_fast(x)
         if self.fc_gate is None:
-            y = self.fc2(self.dropout(self.activation(self.fc1(x))))
+            y = z_fast + self.fc2(self.dropout(self.activation(self.fc1(x))))
         else:
-            y = self.fc2(self.dropout(self.activation(self.fc1(x), self.fc_gate(x))))
-        return y
+            y = z_fast + self.fc2(self.dropout(self.activation(self.fc1(x), self.fc_gate(x))))
+        return self.embedder.decode(y)
 
-### It's probably better to separate out the encoder/decoder into multiscale_bcat.py
-class TwoLevelTransformerEncoder(nn.Module):
+class TwoScaleTransformerEncoder(nn.Module):
     """
     Stack of TwoScaleTransformerEncoderLayer layers, mirroring CustomTransformerEncoder but
     operating on coupled fast/slow streams. Applies layers sequentially and returns (fast, slow).
@@ -684,9 +525,8 @@ class TwoLevelTransformerEncoder(nn.Module):
     def forward(
         self,
         *args,
+        masks: dict,
         time_dim: int = 1,
-        fast_attn_mask=None,
-        fast_block_mask=None,
         is_causal: bool = False,
         spatial_tokens: int = 1,
         full: bool = True,
@@ -700,8 +540,7 @@ class TwoLevelTransformerEncoder(nn.Module):
             return self.forward_full(
                 *args,
                 time_dim=time_dim,
-                fast_attn_mask=fast_attn_mask,
-                fast_block_mask=fast_block_mask,
+                masks=masks,
                 is_causal=is_causal,
                 spatial_tokens=spatial_tokens,
                 rotary_emb=self.rotary_emb if self.rotary else None,
@@ -721,8 +560,7 @@ class TwoLevelTransformerEncoder(nn.Module):
             x_fast,
             x_slow,
             time_dim=time_dim,
-            fast_attn_mask=fast_attn_mask,
-            fast_block_mask=fast_block_mask,
+            masks=masks,
             is_causal=is_causal,
             spatial_tokens=spatial_tokens,
             rotary_emb=self.rotary_emb if self.rotary else None,
@@ -731,9 +569,8 @@ class TwoLevelTransformerEncoder(nn.Module):
     def forward_full(
         self,
         *args,
+        masks: dict,
         time_dim: int = 1,
-        fast_attn_mask=None,
-        fast_block_mask=None,
         is_causal: bool = False,
         spatial_tokens: int = 1,
         rotary_emb=None,
@@ -753,8 +590,7 @@ class TwoLevelTransformerEncoder(nn.Module):
             x_fast,
             x_slow,
             time_dim=time_dim,
-            fast_attn_mask=fast_attn_mask,
-            fast_block_mask=fast_block_mask,
+            masks=masks,
             is_causal=is_causal,
             spatial_tokens=spatial_tokens,
             rotary_emb=rotary_emb,
@@ -766,9 +602,8 @@ class TwoLevelTransformerEncoder(nn.Module):
         self,
         x_fast: torch.Tensor,
         x_slow: torch.Tensor,
+        masks: dict,
         time_dim: int = 1,
-        fast_attn_mask=None,
-        fast_block_mask=None,
         is_causal: bool = False,
         spatial_tokens: int = 1,
         rotary_emb=None,
@@ -781,8 +616,7 @@ class TwoLevelTransformerEncoder(nn.Module):
                 out_fast,
                 out_slow,
                 time_dim=time_dim,
-                fast_attn_mask=fast_attn_mask,
-                fast_block_mask=fast_block_mask,
+                masks=masks,
                 is_causal=is_causal,
                 spatial_tokens=spatial_tokens,
                 rotary_emb=rotary_emb,
@@ -796,120 +630,309 @@ class TwoLevelTransformerEncoder(nn.Module):
         return out_fast, out_slow
 
 
-def _downsample_mask(
-    mask: Optional[torch.Tensor],
-    rate: int,
-    spatial_tokens: int = 1,
-    reduce_op: str = "all",
-    float_mode: str = "all_masked",
-) -> Optional[torch.Tensor]:
-    if mask is None:
-        return None
-    if isinstance(mask, BlockMask):
-        dense = mask.to_dense()
-    else:
-        dense = mask
+# class SplitProcessor(nn.Module):
+#     """
+#     Split a dimension of a tensor into two parts, process each part with its own module,
+#     and concatenate the results back along the same dimension.
+#     Split evenly by default, custom split sizes via split_sizes param.
+#     """
 
-    # Pad query/key axes to rounded-up lengths
-    pad_value = True if dense.dtype == torch.bool else float("-inf")
-    dense, _ = pad_for_slow(dense, rate=rate, time_dim=-1, spatial_tokens=spatial_tokens, pad_value=pad_value)
-    dense, _ = pad_for_slow(dense, rate=rate, time_dim=-2, spatial_tokens=spatial_tokens, pad_value=pad_value)
+#     def __init__(
+#         self,
+#         branch1: nn.Module,
+#         branch2: nn.Module,
+#         split_dim: int = -1,
+#         split_sizes: Optional[tuple[int, int]] = None,
+#         cat_dim: int = -1,
+#     ) -> None:
+#         super().__init__()
+#         self.branch1 = branch1
+#         self.branch2 = branch2
+#         self.split_dim = split_dim
+#         self.split_sizes = split_sizes
 
-    if spatial_tokens > 1:
-        # dense: [*prefix, L, L], where L = t_len * spatial_tokens
-        t_len = dense.shape[-1] // spatial_tokens
-        slow_len = t_len // rate
-        # Split each attention axis into (slow_len, rate, spatial_tokens).
-        # dense: [*prefix, slow_len, rate, spatial_tokens, slow_len, rate, spatial_tokens]
-        dense = rearrange(
-            dense,
-            "... (slow r s) (slow2 r2 s2) -> ... slow r s slow2 r2 s2",
-            slow=slow_len,
-            r=rate,
-            s=spatial_tokens,
-            slow2=slow_len,
-            r2=rate,
-            s2=spatial_tokens,
-        )
-        # Reduce over the rate dimension on both query and key axes.
-        reduce_dims = (-5, -2)
-    else:
-        # dense: [*prefix, L, L], where L = slow_len * rate
-        prefix_shape = dense.shape[:-2]
-        slow_len = dense.shape[-1] // rate
-        # Split each attention axis into (slow_len, rate) for temporal downsampling.
-        # dense: [*prefix, slow_len, rate, slow_len, rate]
-        dense = rearrange(
-            dense,
-            "... (slow r) (slow2 r2) -> ... slow r slow2 r2",
-            slow=slow_len,
-            r=rate,
-            slow2=slow_len,
-            r2=rate,
-        )
-        # Reduce over the rate dimension on both query and key axes.
-        reduce_dims = (-3, -1)
+#     def forward(self, x: torch.Tensor, kw1: Optional[dict] = None, kw2: Optional[dict] = None) -> torch.Tensor:
+#         kw1 = kw1 or {}
+#         kw2 = kw2 or {}
+#         feature_dim = x.size(self.split_dim)
+#         if self.split_sizes is None:
+#             if feature_dim % 2 != 0:
+#                 raise ValueError("Even split requested but split dim size is not divisible by 2.")
+#             split_sizes = (feature_dim // 2, feature_dim // 2)
+#         else:
+#             if sum(self.split_sizes) != feature_dim:
+#                 raise ValueError(
+#                     f"split_sizes {self.split_sizes} must sum to split dim size {feature_dim}."
+#                 )
+#             split_sizes = self.split_sizes
 
-    if dense.dtype == torch.bool:
-        # Bool masks: reduce by logical all/any to keep block semantics.
-        if reduce_op == "all":
-            slow = dense.all(dim=reduce_dims)
-        elif reduce_op == "any":
-            slow = dense.any(dim=reduce_dims)
-        else:
-            raise ValueError(f"Unsupported reduce_op for bool mask: {reduce_op}")
-        if spatial_tokens > 1:
-            return rearrange(slow, "... t s t2 s2 -> ... (t s) (t2 s2)")
-        return slow
+#         x1, x2 = torch.split(x, split_sizes, dim=self.split_dim)
+#         y1 = self.branch1(x1, **kw1)
+#         y2 = self.branch2(x2, **kw2)
+#         return y1, y2
+#         #return torch.cat([y1, y2], dim=self.split_dim)
 
-    if float_mode == "all_masked":
-        # Float masks: mark a slow cell as masked only if all finer cells are masked.
-        masked = torch.isneginf(dense) | (dense <= -1e9)
-        all_masked = masked.all(dim=reduce_dims)
-        slow = torch.zeros(all_masked.shape, device=dense.device, dtype=dense.dtype)
-        slow = slow.masked_fill(all_masked, float("-inf"))
-        if spatial_tokens > 1:
-            return rearrange(slow, "... t s t2 s2 -> ... (t s) (t2 s2)")
-        return slow
-    if float_mode == "amax":
-        # Float masks: preserve any allowed score within the rate block.
-        slow = dense.amax(dim=reduce_dims)
-        if spatial_tokens > 1:
-            return rearrange(slow, "... t s t2 s2 -> ... (t s) (t2 s2)")
-        return slow
-    raise ValueError(f"Unsupported float_mode: {float_mode}")
+# class _SelfAttnBranch(nn.Module):
+#     def __init__(self, mha: nn.Module):
+#         super().__init__()
+#         self.mha = mha
 
+#     def forward(
+#         self,
+#         x: torch.Tensor,
+#         key_padding_mask=None,
+#         attn_mask=None,
+#         block_mask=None,
+#         is_causal: bool = False,
+#         rotary_emb=None,
+#     ) -> torch.Tensor:
+#         return self.mha(
+#             x,
+#             x,
+#             x,
+#             key_padding_mask=key_padding_mask,
+#             attn_mask=attn_mask,
+#             block_mask=block_mask,
+#             is_causal=is_causal,
+#             rotary_emb=rotary_emb,
+#         )
 
-def _downsample_attn_mask(
-    mask: Optional[torch.Tensor], rate: int, spatial_tokens: int = 1
-) -> Optional[torch.Tensor]:
-    return _downsample_mask(
-        mask=mask,
-        rate=rate,
-        spatial_tokens=spatial_tokens,
-        reduce_op="all",
-        float_mode="all_masked",
-    )
+# class _CrossAttnBranch(nn.Module):
+#     def __init__(self, mha: nn.Module):
+#         super().__init__()
+#         self.mha = mha
 
+#     def forward(
+#         self,
+#         x: torch.Tensor,
+#         y: torch.Tensor,
+#         y_key_padding_mask=None,
+#         attn_mask=None,
+#         block_mask=None,
+#         is_causal: bool = False,
+#         rotary_emb=None,
+#     ) -> torch.Tensor:
+#         return self.mha(
+#             x,
+#             y,
+#             y,
+#             key_padding_mask=y_key_padding_mask,
+#             attn_mask=attn_mask,
+#             block_mask=block_mask,
+#             is_causal=is_causal,
+#             rotary_emb=rotary_emb,
+#         )
 
-def _downsample_block_mask(
-    mask: Optional[torch.Tensor], rate: int, spatial_tokens: int = 1
-) -> Optional[torch.Tensor]:
-    if isinstance(mask, BlockMask):
-        return None
-    return _downsample_mask(
-        mask=mask,
-        rate=rate,
-        spatial_tokens=spatial_tokens,
-        reduce_op="any",
-        float_mode="amax",
-    )
+# Legacy MixedSplitAttention is currently unused after refactor.
+# Keeping a commented version of the previous implementation for reference.
+# class MixedSplitAttention(nn.Module):
+#     """
+#     Mixed self- and cross-attention on split features:
+#       - First half attends to itself (self-attention on x_1).
+#       - Second half attends to y (cross-attention from x_2 -> y_2).
+#     """
+#
+#     def __init__(
+#         self,
+#         embed_dim: int,
+#         num_heads: int,
+#         dropout: float = 0.0,
+#         bias: bool = True,
+#         qk_norm: bool = False,
+#         split_dim: int = -1,
+#         split_sizes: Optional[tuple[int, int]] = None,
+#         flex_attn: bool = False,
+#     ):
+#         super().__init__()
+#         self.split_dim = split_dim
+#         self.split_sizes = split_sizes
+#         self.flex_attn = flex_attn
+#
+#         if split_sizes is None:
+#             if embed_dim % 2 != 0:
+#                 raise ValueError("embed_dim must be even for equal split when split_sizes is None.")
+#             d1 = d2 = embed_dim // 2
+#         else:
+#             if sum(split_sizes) != embed_dim:
+#                 raise ValueError("sum(split_sizes) must equal embed_dim.")
+#             d1, d2 = split_sizes
+#
+#         self.d1 = d1
+#         self.d2 = d2
+#
+#         MHA = MultiheadFlexAttention if flex_attn else MultiheadAttention
+#         self.self_branch = _SelfAttnBranch(
+#             MHA(d1, num_heads=num_heads, dropout=dropout, bias=bias, qk_norm=qk_norm)
+#         )
+#         self.cross_branch = _CrossAttnBranch(
+#             MHA(d2, num_heads=num_heads, dropout=dropout, bias=bias, qk_norm=qk_norm)
+#         )
+#         self.split_processor = SplitProcessor(
+#             self.self_branch,
+#             self.cross_branch,
+#             split_dim=split_dim,
+#             split_sizes=(d1, d2),
+#         )
+#
+#     def forward(
+#         self,
+#         x: torch.Tensor,
+#         y: torch.Tensor,
+#         x_key_padding_mask=None,
+#         y_key_padding_mask=None,
+#         attn_mask=None,
+#         block_mask=None,
+#         is_causal: bool = False,
+#         rotary_emb=None,
+#     ) -> torch.Tensor:
+#         # Ensure y has the correct feature size for cross branch
+#         if y.size(self.split_dim) != self.d2:
+#             raise ValueError(
+#                 f"y feature dim ({y.size(self.split_dim)}) must equal cross-branch dim ({self.d2})."
+#             )
+#
+#         # Build per-branch kwargs; execute via SplitProcessor
+#         kw1 = dict(
+#             key_padding_mask=x_key_padding_mask,
+#             attn_mask=attn_mask,
+#             block_mask=block_mask,
+#             is_causal=is_causal,
+#             rotary_emb=rotary_emb,
+#         )
+#         kw2 = dict(
+#             y=y,
+#             y_key_padding_mask=y_key_padding_mask,
+#             attn_mask=attn_mask,
+#             block_mask=block_mask,
+#             is_causal=is_causal,
+#             rotary_emb=rotary_emb,
+#         )
+#         out = self.split_processor(x, kw1=kw1, kw2=kw2)
+#         if isinstance(out, tuple) and len(out) == 2:
+#             y1, y2 = out
+#             return torch.cat([y1, y2], dim=self.split_dim)
+#         return out
 
+# Legacy mask downsampling helpers are currently unused after refactor.
+# Keep them commented out for reference until fully removed.
+# if False:
+#     def _downsample_mask(
+#         mask: Optional[torch.Tensor],
+#         rate: int,
+#         spatial_tokens: int = 1,
+#         reduce_op: str = "all",
+#         float_mode: str = "all_masked",
+#     ) -> Optional[torch.Tensor]:
+#         if mask is None:
+#             return None
+#         if isinstance(mask, BlockMask):
+#             dense = mask.to_dense()
+#         else:
+#             dense = mask
+#
+#         # Pad query/key axes to rounded-up lengths
+#         pad_value = True if dense.dtype == torch.bool else float("-inf")
+#         dense, _ = pad_for_slow(dense, rate=rate, time_dim=-1, spatial_tokens=spatial_tokens, pad_value=pad_value)
+#         dense, _ = pad_for_slow(dense, rate=rate, time_dim=-2, spatial_tokens=spatial_tokens, pad_value=pad_value)
+#
+#         if spatial_tokens > 1:
+#             # dense: [*prefix, L, L], where L = t_len * spatial_tokens
+#             t_len = dense.shape[-1] // spatial_tokens
+#             slow_len = t_len // rate
+#             # Split each attention axis into (slow_len, rate, spatial_tokens).
+#             # dense: [*prefix, slow_len, rate, spatial_tokens, slow_len, rate, spatial_tokens]
+#             dense = rearrange(
+#                 dense,
+#                 "... (slow r s) (slow2 r2 s2) -> ... slow r s slow2 r2 s2",
+#                 slow=slow_len,
+#                 r=rate,
+#                 s=spatial_tokens,
+#                 slow2=slow_len,
+#                 r2=rate,
+#                 s2=spatial_tokens,
+#             )
+#             # Reduce over the rate dimension on both query and key axes.
+#             reduce_dims = (-5, -2)
+#         else:
+#             # dense: [*prefix, L, L], where L = slow_len * rate
+#             prefix_shape = dense.shape[:-2]
+#             slow_len = dense.shape[-1] // rate
+#             # Split each attention axis into (slow_len, rate) for temporal downsampling.
+#             # dense: [*prefix, slow_len, rate, slow_len, rate]
+#             dense = rearrange(
+#                 dense,
+#                 "... (slow r) (slow2 r2) -> ... slow r slow2 r2",
+#                 slow=slow_len,
+#                 r=rate,
+#                 slow2=slow_len,
+#                 r2=rate,
+#             )
+#             # Reduce over the rate dimension on both query and key axes.
+#             reduce_dims = (-3, -1)
+#
+#         if dense.dtype == torch.bool:
+#             # Bool masks: reduce by logical all/any to keep block semantics.
+#             if reduce_op == "all":
+#                 slow = dense.all(dim=reduce_dims)
+#             elif reduce_op == "any":
+#                 slow = dense.any(dim=reduce_dims)
+#             else:
+#                 raise ValueError(f"Unsupported reduce_op for bool mask: {reduce_op}")
+#             if spatial_tokens > 1:
+#                 return rearrange(slow, "... t s t2 s2 -> ... (t s) (t2 s2)")
+#             return slow
+#
+#         if float_mode == "all_masked":
+#             # Float masks: mark a slow cell as masked only if all finer cells are masked.
+#             masked = torch.isneginf(dense) | (dense <= -1e9)
+#             all_masked = masked.all(dim=reduce_dims)
+#             slow = torch.zeros(all_masked.shape, device=dense.device, dtype=dense.dtype)
+#             slow = slow.masked_fill(all_masked, float("-inf"))
+#             if spatial_tokens > 1:
+#                 return rearrange(slow, "... t s t2 s2 -> ... (t s) (t2 s2)")
+#             return slow
+#         if float_mode == "amax":
+#             # Float masks: preserve any allowed score within the rate block.
+#             slow = dense.amax(dim=reduce_dims)
+#             if spatial_tokens > 1:
+#                 return rearrange(slow, "... t s t2 s2 -> ... (t s) (t2 s2)")
+#             return slow
+#         raise ValueError(f"Unsupported float_mode: {float_mode}")
+#
+#
+#     def _downsample_attn_mask(
+#         mask: Optional[torch.Tensor], rate: int, spatial_tokens: int = 1
+#     ) -> Optional[torch.Tensor]:
+#         return _downsample_mask(
+#             mask=mask,
+#             rate=rate,
+#             spatial_tokens=spatial_tokens,
+#             reduce_op="all",
+#             float_mode="all_masked",
+#         )
+#
+#
+#     def _downsample_block_mask(
+#         mask: Optional[torch.Tensor], rate: int, spatial_tokens: int = 1
+#     ) -> Optional[torch.Tensor]:
+#         if isinstance(mask, BlockMask):
+#             return None
+#         return _downsample_mask(
+#             mask=mask,
+#             rate=rate,
+#             spatial_tokens=spatial_tokens,
+#             reduce_op="any",
+#             float_mode="amax",
+#         )
 
 if __name__ == "__main__":
-    from models.bcat import block_lower_triangular_mask
 
     torch.manual_seed(0)
+    from models.multiscale_bcat import (
+        build_fast_to_slow_mask,
+        build_self_attn_mask,
+        build_slow_to_fast_mask,
+    )
 
     batch_size = 2
     fast_embed_dim = 8
@@ -925,18 +948,13 @@ if __name__ == "__main__":
     if time_len_fast % temporal_rate != 0:
         raise ValueError("time_len_fast must be divisible by temporal_rate.")
 
-    class IdentityEncoder(nn.Module):
-        def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+    class IdentityEmbedder(nn.Module):
+        def encode(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
             return x
 
-    pool_ffn = PoolFFN(
-        in_dim=fast_embed_dim,
-        out_dim=slow_embed_dim // 2,
-        hidden_dim=16,
-        rate=rate,
-        act="gelu",
-        dropout=0.0,
-    )
+        def decode(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+            return x
+
     encoder_pool_ffn = PoolFFN(
         in_dim=fast_embed_dim,
         out_dim=slow_embed_dim,
@@ -945,23 +963,21 @@ if __name__ == "__main__":
         act="gelu",
         dropout=0.0,
     )
-    lift_ffn = nn.Linear(slow_embed_dim, fast_embed_dim // 2)
-
     layer = TwoScaleTransformerEncoderLayer(
         fast_embed_dim=fast_embed_dim,
         slow_embed_dim=slow_embed_dim,
         num_heads=num_heads,
         rate=rate,
-        pool_ffn=pool_ffn,
-        lift_ffn=lift_ffn,
+        dim_ffn=16,
         dropout=0.0,
+        act="gelu",
         bias=True,
         qk_norm=False,
         flex_attn=False,
     )
 
     split_encoder = SplitEncoder(
-        encoder=IdentityEncoder(),
+        embedder=IdentityEmbedder(),
         rate=rate,
         pool_ffn=encoder_pool_ffn,
         time_dim=1,
@@ -972,14 +988,13 @@ if __name__ == "__main__":
         slow_embed_dim=slow_embed_dim,
         rate=rate,
         hidden_dim=16,
-        lift_ffn=lift_ffn,
-        lift_dim=fast_embed_dim // 2,
         act="gelu",
         dropout=0.0,
         time_dim=1,
         spatial_tokens=spatial_tokens,
+        embedder=IdentityEmbedder(),
     )
-    encoder = TwoLevelTransformerEncoder(
+    encoder = TwoScaleTransformerEncoder(
         encoder_layer=layer,
         num_layers=2,
         norm_fast=nn.LayerNorm(fast_embed_dim),
@@ -994,16 +1009,29 @@ if __name__ == "__main__":
     x_fast = torch.randn(batch_size, fast_seq_len, fast_embed_dim)
     x_slow = torch.randn(batch_size, slow_seq_len, slow_embed_dim)
 
-    block_size = spatial_tokens
-    block_num = time_len_fast
-    attn_mask = block_lower_triangular_mask(block_size, block_num, use_float=True)
+    fast_self_mask = build_self_attn_mask(
+        time_len_fast, spatial_tokens, device=x_fast.device, dtype=x_fast.dtype
+    )
+    slow_self_mask = build_self_attn_mask(
+        time_len_slow, spatial_tokens, device=x_fast.device, dtype=x_fast.dtype
+    )
+    fast_to_slow_mask = build_fast_to_slow_mask(
+        time_len_fast, time_len_slow, rate, spatial_tokens, device=x_fast.device, dtype=x_fast.dtype
+    )
+    slow_to_fast_mask = build_slow_to_fast_mask(
+        time_len_fast, time_len_slow, rate, spatial_tokens, device=x_fast.device, dtype=x_fast.dtype
+    )
 
     z_fast, z_slow = layer(
         x_fast=x_fast,
         x_slow=x_slow,
         time_dim=1,
-        fast_attn_mask=attn_mask,
-        fast_block_mask=None,
+        masks={
+            "fast_self_attn_mask": fast_self_mask,
+            "slow_self_attn_mask": slow_self_mask,
+            "fast_to_slow_attn_mask": fast_to_slow_mask,
+            "slow_to_fast_attn_mask": slow_to_fast_mask,
+        },
         is_causal=False,
         spatial_tokens=spatial_tokens,
     )
@@ -1011,8 +1039,12 @@ if __name__ == "__main__":
     out_full = encoder(
         x_fast,
         time_dim=1,
-        fast_attn_mask=attn_mask,
-        fast_block_mask=None,
+        masks={
+            "fast_self_attn_mask": fast_self_mask,
+            "slow_self_attn_mask": slow_self_mask,
+            "fast_to_slow_attn_mask": fast_to_slow_mask,
+            "slow_to_fast_attn_mask": slow_to_fast_mask,
+        },
         is_causal=False,
         spatial_tokens=spatial_tokens,
         full=True,
@@ -1022,8 +1054,12 @@ if __name__ == "__main__":
         x_fast,
         x_slow,
         time_dim=1,
-        fast_attn_mask=attn_mask,
-        fast_block_mask=None,
+        masks={
+            "fast_self_attn_mask": fast_self_mask,
+            "slow_self_attn_mask": slow_self_mask,
+            "fast_to_slow_attn_mask": fast_to_slow_mask,
+            "slow_to_fast_attn_mask": slow_to_fast_mask,
+        },
         is_causal=False,
         spatial_tokens=spatial_tokens,
         full=False,
@@ -1039,6 +1075,6 @@ if __name__ == "__main__":
 
     print("TwoScaleTransformerEncoderLayer z_fast:", z_fast.shape)
     print("TwoScaleTransformerEncoderLayer z_slow:", z_slow.shape)
-    print("TwoLevelTransformerEncoder full output:", out_full.shape)
-    print("TwoLevelTransformerEncoder out_fast:", out_fast.shape)
-    print("TwoLevelTransformerEncoder out_slow:", out_slow.shape)
+    print("TwoScaleTransformerEncoder full output:", out_full.shape)
+    print("TwoScaleTransformerEncoder out_fast:", out_fast.shape)
+    print("TwoScaleTransformerEncoder out_slow:", out_slow.shape)
