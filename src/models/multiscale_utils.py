@@ -235,6 +235,8 @@ class SplitEncoder(nn.Module):
         )
         return f, s
 
+# TO DO (note): is_causal is somewhat redundant since the masks are causal anyway, 
+# but it seems like we're setting it to False everywhere anyway
 class TwoScaleTransformerEncoderLayer(nn.Module):
     """
     Two-scale encoder layer with separate self- and cross-attention.
@@ -605,6 +607,7 @@ class TwoScaleTransformerEncoder(nn.Module):
                 rotary_emb=rotary_emb,
             )
 
+        # TO DO: are these needed?
         if self.norm_fast is not None:
             out_fast = self.norm_fast(out_fast)
         if self.norm_slow is not None:
