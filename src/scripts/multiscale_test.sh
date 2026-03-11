@@ -1,4 +1,3 @@
-# run only MultiscaleBCAT without ablation tests
 expid=multiscale_bcat_17
 # expid=bcat_baseline
 #python main.py exp_id=${expid} batch_size=16 data=fluids_arena compile=1 optim=adamw model=multiscale_bcat model.flex_attn=1 #dryrun=1
