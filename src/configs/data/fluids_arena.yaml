@@ -22,7 +22,7 @@ sampler:
   incom_ns_arena: 1
 
 incom_ns_arena:
-  folder: /s1/shared/dataset/pdearena/NavierStokes-2D-conditioned
+  folder: /data/shared/dataset/pdearena/NavierStokes-2D-conditioned
   t_step: 1 # dt=1.5
   x_num: 128
   dim: 3

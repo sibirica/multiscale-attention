@@ -14,6 +14,7 @@ from .attention_utils import DynamicTanh
 from .bcat import block_causal
 from .embedder import get_embedder
 from .multiscale_utils import (
+    AsymmetricFFN,
     PoolFFN,
     RecombineDecoder,
     SplitEncoder,
@@ -194,6 +195,7 @@ class MultiscaleBCAT(nn.Module):
         embedder_dim = config.embedder.dim
         slow_embed_dim = config.get("slow_dim", config.dim_emb)
         recombine_hidden_dim = config.get("recombine_dim", config.dim_ffn)
+        lift_hidden_dim = config.get("lift_dim", config.dim_ffn)
         pool_hidden_dim = config.get("pool_dim", config.dim_ffn)
         activation = config.get("activation", "gelu")
 
@@ -205,7 +207,13 @@ class MultiscaleBCAT(nn.Module):
             act=activation,
             dropout=config.dropout,
         )
-        lift_ffn = nn.Linear(slow_embed_dim, fast_embed_dim)
+        #lift_ffn = nn.Linear(slow_embed_dim, fast_embed_dim)
+        lift_ffn = AsymmetricFFN(
+            in_dim=slow_embed_dim, 
+            hidden_dim=lift_hidden_dim,
+            out_dim=fast_embed_dim, 
+            act=activation, 
+            dropout=config.dropout)
 
         encoder_layer = TwoScaleTransformerEncoderLayer(
             fast_embed_dim=fast_embed_dim,
@@ -218,6 +226,7 @@ class MultiscaleBCAT(nn.Module):
             bias=True,
             qk_norm=config.get("qk_norm", False),
             flex_attn=self.flex_attn,
+            shared_scale_ffn=config.get("shared_scale_ffn", False),
         )
         split_encoder = SplitEncoder(
             embedder=self.embedder,
@@ -236,6 +245,9 @@ class MultiscaleBCAT(nn.Module):
             dropout=config.dropout,
             spatial_tokens=config.embedder.patch_num**2,
             embedder=self.embedder,
+            log_norms=config.get("log_recombine_norms", False),
+            log_norms_mode=config.get("log_recombine_norms_mode", "inference"),
+            log_once=config.get("log_once", True),
         )
         self.transformer = TwoScaleTransformerEncoder(
             encoder_layer=encoder_layer,
@@ -454,20 +466,16 @@ class MultiscaleBCAT(nn.Module):
         data_all = torch.zeros(bs, t_num, x_num, x_num, data_dim, dtype=data_input.dtype, device=data_input.device)
         data_all[:, :input_len] = data_input
         cur_len = input_len
-        # NOTE: kv_cache is disabled for now.
+        # prev_len = 0
+        fast_time = cur_len
+        slow_time = (fast_time - 1) // self.rate + 1
 
-        remaining = output_len
-        # First block aligns to the next multiple of rate (or full rate if already aligned).
-        # Outputs past desired length are not generated.
-        step_len = (-cur_len) % self.rate
-        if step_len == 0:
-            step_len = self.rate
-        while remaining > 0:
-            block_len = min(step_len, remaining)
+        for i in range(output_len):
             cur_data_input = data_all[:, :cur_len]  # (bs, cur_len, x_num, x_num, data_dim)
 
-            fast_time = cur_len
-            slow_time = (fast_time - 1) // self.rate + 1
+            # (bs, cur_len, x_num, x_num, data_dim) -> (bs, data_len=cur_len*p*p, dim)
+            # skip_len = prev_len if self.config.kv_cache else 0
+
             masks = self._build_masks(
                 fast_time,
                 slow_time,
@@ -475,7 +483,7 @@ class MultiscaleBCAT(nn.Module):
                 dtype=cur_data_input.dtype,
             )
 
-            # does this need SDPA kernel line?
+            # does this need SDPA kernel line? -> only if flex_attn is false
             cur_data_encoded = self.transformer(
                     data=cur_data_input,
                     times=times[:, :cur_len],
@@ -485,15 +493,74 @@ class MultiscaleBCAT(nn.Module):
                     full=True,
             )
 
-            new_output = cur_data_encoded[:, -block_len:]  # (bs, block_len, x_num, x_num, data_dim)
-            new_output = new_output * data_mask  # (bs, block_len, x_num, x_num, data_dim)
+            # if self.config.kv_cache:
+            #     cur_data_encoded = self.transformer(cur_data_input, mask, block_mask=block_mask, cache=cache)
+            # else:
+            #     cur_data_encoded = self.transformer(cur_data_input, mask, block_mask=block_mask)  # (bs, data_len, dim)
+
+            new_output = cur_data_encoded[:, -1:]  # (bs, 1, x_num**2*data_dim)
+
+            new_output = new_output * data_mask  # (bs, 1, x_num, x_num, data_dim)
 
             if carry_over_c >= 0:
-                new_output[:, :, :, :, carry_over_c] = data_all[:, 0, :, :, carry_over_c]
+                new_output[:, 0, :, :, carry_over_c] = data_all[:, 0, :, :, carry_over_c]
 
-            data_all[:, cur_len : cur_len + block_len] = new_output
-            cur_len += block_len
-            remaining -= block_len
-            step_len = self.rate
+            data_all[:, cur_len : cur_len + 1] = new_output
+            # prev_len = cur_len
+            cur_len += 1
+            fast_time = cur_len
+            slow_time = (fast_time - 1) // self.rate + 1
 
         return data_all[:, input_len:]
+        
+        # OLD GENERATION CODE: attempt to do one slow block forward
+        # t_num = times.size(1)
+        # output_len = t_num - input_len
+        # bs, _, x_num, _, data_dim = data_input.size()
+
+        # data_all = torch.zeros(bs, t_num, x_num, x_num, data_dim, dtype=data_input.dtype, device=data_input.device)
+        # data_all[:, :input_len] = data_input
+        # cur_len = input_len
+        # # NOTE: kv_cache is disabled for now.
+
+        # remaining = output_len
+        # # First block aligns to the next multiple of rate (or full rate if already aligned).
+        # # Outputs past desired length are not generated.
+        # step_len = (-cur_len) % self.rate
+        # if step_len == 0:
+        #     step_len = self.rate
+        # while remaining > 0:
+        #     block_len = min(step_len, remaining)
+        #     cur_data_input = data_all[:, :cur_len]  # (bs, cur_len, x_num, x_num, data_dim)
+
+        #     fast_time = cur_len
+        #     slow_time = (fast_time - 1) // self.rate + 1
+        #     masks = self._build_masks(
+        #         fast_time,
+        #         slow_time,
+        #         device=cur_data_input.device,
+        #         dtype=cur_data_input.dtype,
+        #     )
+
+        #     # does this need SDPA kernel line? -> only if flex_attn is false
+        #     cur_data_encoded = self.transformer(
+        #             data=cur_data_input,
+        #             times=times[:, :cur_len],
+        #             masks=masks,
+        #             is_causal=False,
+        #             spatial_tokens=self.seq_len_per_step,
+        #             full=True,
+        #     )
+
+        #     new_output = cur_data_encoded[:, -block_len:]  # (bs, block_len, x_num, x_num, data_dim)
+        #     new_output = new_output * data_mask  # (bs, block_len, x_num, x_num, data_dim)
+
+        #     if carry_over_c >= 0:
+        #         new_output[:, :, :, :, carry_over_c] = data_all[:, 0, :, :, carry_over_c]
+
+        #     data_all[:, cur_len : cur_len + block_len] = new_output
+        #     cur_len += block_len
+        #     remaining -= block_len
+        #     step_len = self.rate
+
+        # return data_all[:, input_len:]

@@ -16,6 +16,8 @@ import hydra
 from trainer import Trainer
 from evaluate import Evaluator, metric_to_header
 
+# import torch._dynamo
+# torch._dynamo.config.optimize_ddp = False
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 

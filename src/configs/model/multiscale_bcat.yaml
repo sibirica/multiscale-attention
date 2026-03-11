@@ -1,12 +1,13 @@
 name: multiscale_bcat_auto
 
 # shared attributes
-n_layer: 6
-dim_emb: 512 # 1024
+n_layer: 6 # 12
+dim_emb: 1024 # 512 # fast embedding dimension
 slow_dim: ${.dim_emb}
-dim_ffn: 2752
-recombine_dim: ${.dim_ffn}
-pool_dim: ${.dim_ffn}
+dim_ffn: 2752 # 1376
+pool_dim: 2752 # hidden layer size of slow layer encoding ffn
+lift_dim: 2752 # hidden layer size of lifting from slow to fast
+recombine_dim: 2752 # hidden layer size of recombined layer decoding ffn
 dropout: 0
 attn_dropout: 0
 n_head: 8
@@ -20,6 +21,11 @@ rotary: 0
 flex_attn: 0
 kv_cache: 0
 rate: 8
+shared_scale_ffn: 0 # if 1, fast/slow streams in each layer use the same FFN weights
+
+log_recombine_norms: 1
+log_recombine_norms_mode: always # choose from [inference, always]
+log_once: 1
 
 patch_num: 8 #16 # for input, number of patches per dimension
 patch_num_output: ${.patch_num} # for output, number of patches per dimension

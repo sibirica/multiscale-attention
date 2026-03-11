@@ -1,10 +1,35 @@
-from typing import Optional
+from typing import Literal, Optional
 import torch
 import torch.nn as nn
 
-from einops import rearrange
+# wandb for logging
+import torch.distributed as dist
+import wandb
+
+from einops import rearrange, repeat
 from rotary_embedding_torch import RotaryEmbedding
 from .attention_utils import FFN, get_activation, MultiheadAttention, MultiheadFlexAttention, _get_clones
+
+class AsymmetricFFN(nn.Module):
+    def __init__(self, in_dim, hidden_dim, out_dim, act="gelu", dropout=0):
+        super().__init__()
+
+        self.fc1 = nn.Linear(in_dim, hidden_dim)
+
+        if act.endswith("glu"):
+            self.fc_gate = nn.Linear(in_dim, hidden_dim)
+        else:
+            self.fc_gate = None
+
+        self.activation = get_activation(act)()
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.fc2 = nn.Linear(hidden_dim, out_dim)
+
+    def forward(self, x):
+        if self.fc_gate is None:
+            return self.fc2(self.dropout(self.activation(self.fc1(x))))
+        else:
+            return self.fc2(self.dropout(self.activation(self.fc1(x), self.fc_gate(x))))
 
 def lift(
     s: torch.Tensor,
@@ -177,10 +202,14 @@ def pad_for_slow(
     time_dim: int = 1,
     spatial_tokens: int = 1,
     pad_value: Optional[float] = 0.0,
+    padding_mode: Literal["repeat", "zero"] = "repeat",
 ) -> tuple[torch.Tensor, int]:
     """
     Pad the time axis so pooling by `rate` is exact.
     Padding is appended along `time_dim` and repeated across spatial tokens.
+    Supported padding modes:
+      - "repeat": repeat the final temporal frame (size `spatial_tokens`) `pad_steps` times.
+      - "zero": append constant values using `pad_value`.
     Returns the padded tensor and the number of temporal steps added.
     """
     dim = time_dim if time_dim >= 0 else x.dim() + time_dim # else: wrap around negative index
@@ -192,10 +221,24 @@ def pad_for_slow(
     if pad_steps == 0:
         return x, 0
     pad_len = pad_steps * spatial_tokens
-    pad_shape = list(x.shape)
-    pad_shape[dim] = pad_len
-    pad_tensor = x.new_full(pad_shape, pad_value) # tensor with shape of x with pad_value
-    return torch.cat([x, pad_tensor], dim=dim), pad_steps
+
+    if padding_mode == "zero":
+        pad_shape = list(x.shape)
+        pad_shape[dim] = pad_len
+        pad_tensor = x.new_full(pad_shape, pad_value) # tensor with shape of x with pad_value
+        return torch.cat([x, pad_tensor], dim=dim), pad_steps
+
+    if padding_mode == "repeat":
+        x_time_first = x.movedim(dim, 1)  # [B, T=S*spatial_tokens, ...]
+        last_frame = x_time_first[:, -spatial_tokens:, ...]  # [B, spatial_tokens, ...]
+        # Duplicate the final frame `pad_steps` times, then 
+        # recombine time and spatial axes again.
+        pad_tensor = repeat(last_frame, "b s ... -> b t s ...", t=pad_steps)
+        pad_tensor = rearrange(pad_tensor, "b t s ... -> b (t s) ...")
+        out = torch.cat([x_time_first, pad_tensor], dim=1)
+        return out.movedim(1, dim), pad_steps
+
+    raise ValueError("padding_mode must be either 'repeat' or 'zero'.")
 
 class SplitEncoder(nn.Module):
     """
@@ -235,6 +278,8 @@ class SplitEncoder(nn.Module):
         )
         return f, s
 
+# TO DO (note): is_causal is somewhat redundant since the masks are causal anyway, 
+# but it seems like we're setting it to False everywhere anyway
 class TwoScaleTransformerEncoderLayer(nn.Module):
     """
     Two-scale encoder layer with separate self- and cross-attention.
@@ -252,6 +297,7 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         bias: bool = True,
         qk_norm: bool = False,
         flex_attn: bool = False,
+        shared_scale_ffn: bool = False,
         norm: type[nn.Module] = nn.LayerNorm,
     ) -> None:
         super().__init__()
@@ -282,8 +328,13 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         self.norm_fast_ffn = norm(fast_embed_dim)
         self.norm_slow_ffn = norm(slow_embed_dim)
 
-        self.ffn_fast = FFN(fast_embed_dim, dim_ffn, act=act, dropout=dropout)
-        self.ffn_slow = FFN(slow_embed_dim, dim_ffn, act=act, dropout=dropout)
+        if shared_scale_ffn:
+            shared_ffn = FFN(fast_embed_dim, dim_ffn, act=act, dropout=dropout)
+            self.ffn_fast = shared_ffn
+            self.ffn_slow = shared_ffn
+        else:
+            self.ffn_fast = FFN(fast_embed_dim, dim_ffn, act=act, dropout=dropout)
+            self.ffn_slow = FFN(slow_embed_dim, dim_ffn, act=act, dropout=dropout)
 
     def forward(
         self,
@@ -433,6 +484,9 @@ class RecombineDecoder(nn.Module):
         dropout: float = 0.0,
         time_dim: int = 1,
         spatial_tokens: int = 1,
+        log_norms: bool = False,
+        log_norms_mode: Literal["inference", "always"] = "always",
+        log_once: bool = True,
     ) -> None:
         super().__init__()
         self.rate = rate
@@ -440,6 +494,15 @@ class RecombineDecoder(nn.Module):
         self.spatial_tokens = spatial_tokens
         self.lift_ffn = lift_ffn
         self.embedder = embedder
+
+        # slow/fast norm logging
+        self.log_norms = log_norms
+        self.log_norms_mode = log_norms_mode
+        self.log_once = log_once
+        self._has_logged = False
+        if self.log_norms_mode not in {"inference", "always"}:
+            raise ValueError("log_norms_mode must be either 'inference' or 'always'.")
+
         if lift_dim is None:
             if lift_ffn is None:
                 lift_dim = slow_embed_dim
@@ -456,10 +519,13 @@ class RecombineDecoder(nn.Module):
         self.activation = get_activation(act)()
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.fc2 = nn.Linear(hidden_dim, fast_embed_dim)
-        #self.norm_fast = nn.LayerNorm(fast_embed_dim)
-        self.norm_fast = nn.LayerNorm(in_dim)
+        self.norm_fast = nn.LayerNorm(fast_embed_dim)
+        self.norm_slow = nn.LayerNorm(slow_embed_dim)
+        #self.norm_fast = nn.LayerNorm(in_dim)
 
     def forward(self, z_fast: torch.Tensor, z_slow: torch.Tensor) -> torch.Tensor:
+        if self.training:
+            self._has_logged = False
         # Align time scales by lifting z_slow to the fast length
         z_slow_lift = lift(
             z_slow,
@@ -472,14 +538,41 @@ class RecombineDecoder(nn.Module):
             z_slow_lift = z_slow_lift.narrow(self.time_dim, 0, z_fast.size(self.time_dim))
         if z_slow_lift.size(self.time_dim) != z_fast.size(self.time_dim):
             raise ValueError("RecombineDecoder: time dimensions do not match after lift().")
-        x = torch.cat([z_fast, z_slow_lift], dim=-1)
-        #z_fast_res = self.norm_fast(z_fast)
-        x = self.norm_fast(x)
+        if self._should_log_norms():
+            wandb.log(
+                {
+                    "debug/recombine_z_fast_l2_norm": 
+                    z_fast.detach().norm(dim=-1).mean().item(),
+                    "debug/recombine_z_slow_lift_l2_norm": 
+                    z_slow_lift.detach().norm(dim=-1).mean().item(),
+                },
+                commit=False,
+            )
+            if self.log_once:
+                self._has_logged = True
+        z_fast_norm = self.norm_fast(z_fast)
+        z_slow_norm = self.norm_slow(z_slow_lift)
+        x = torch.cat([z_fast_norm, z_slow_norm], dim=-1)
+        #x = self.norm_fast(x)
+        # TO DO: consider adding second layer
         if self.fc_gate is None:
             y = z_fast + self.fc2(self.dropout(self.activation(self.fc1(x))))
         else:
             y = z_fast + self.fc2(self.dropout(self.activation(self.fc1(x), self.fc_gate(x))))
         return self.embedder.decode(y)
+
+    def _should_log_norms(self) -> bool:
+        if not self.log_norms:
+            return False
+        if self.log_norms_mode == "inference" and self.training:
+            return False
+        if self.log_once and self._has_logged:
+            return False
+        if wandb is None or wandb.run is None:
+            return False
+        if dist.is_available() and dist.is_initialized() and dist.get_rank() != 0:
+            return False
+        return True
 
 class TwoScaleTransformerEncoder(nn.Module):
     """
@@ -605,6 +698,7 @@ class TwoScaleTransformerEncoder(nn.Module):
                 rotary_emb=rotary_emb,
             )
 
+        # TO DO: are these needed?
         if self.norm_fast is not None:
             out_fast = self.norm_fast(out_fast)
         if self.norm_slow is not None:
