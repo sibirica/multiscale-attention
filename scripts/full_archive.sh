@@ -1,5 +1,4 @@
-GPU=1
-GPUs=0,1
+# baseline
 
 expid=bcat_baseline
 torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py exp_id=${expid} batch_size=32 data=fluids_sample compile=1 model.flex_attn=1 &&

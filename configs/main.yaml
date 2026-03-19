@@ -1,5 +1,5 @@
 defaults:
-  - data: arena
+  - data: fluids
   - model: bcat
   - optim: muon
   - _self_
@@ -105,7 +105,7 @@ symbol:
   max_output_dimension: 5
 
 ### experiment & logging names
-exp_name: bcat
+exp_name: bcat_test
 exp_id: null
 
 use_wandb: 1
