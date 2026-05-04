@@ -7,23 +7,25 @@ slow_dim: ${.dim_emb}
 dim_ffn: 2752 # 1376
 pool_dim: 2752 # hidden layer size of slow layer encoding ffn
 lift_dim: 2752 # hidden layer size of lifting from slow to fast
-recombine_dim: 2752 # hidden layer size of recombined layer decoding ffn
+recombine_dim: 2752 # 4800 # 1408 # hidden layer size of recombined layer decoding ffn
 dropout: 0
 attn_dropout: 0
 n_head: 8
 norm_first: true
 positional_embedding: null
 qk_norm: 1
-norm: rms # select from [layer, rms]
+first_norm: rms # select from [layer, rms]
+norm: layer # select from [layer, rms]
 activation: swiglu
+recombine_activation: swiglu # activation function to use in RecombineDecoder FFN
 rotary: 0
 
 flex_attn: 0
 kv_cache: 0
-rate: 8
+rate: 2 # 8
 shared_scale_ffn: 0 # if 1, fast/slow streams in each layer use the same FFN weights
 
-log_recombine_norms: 1
+log_recombine_norms: 0
 log_recombine_norms_mode: always # choose from [inference, always]
 log_once: 1
 
@@ -38,7 +40,7 @@ embedder:
     patch_num_output: ${..patch_num_output}
 
     time_embed: learnable # select from continuous and learnable
-    max_time_len: 20
+    max_time_len: 50 # (switched with length of dataset, previously 20)
 
     conv_dim: 32
     early_conv: 0

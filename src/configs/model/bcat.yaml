@@ -28,7 +28,7 @@ embedder:
     patch_num_output: ${..patch_num_output}
 
     time_embed: learnable # select from continuous and learnable
-    max_time_len: 20
+    max_time_len: 50 # 20
 
     conv_dim: 32
     early_conv: 0

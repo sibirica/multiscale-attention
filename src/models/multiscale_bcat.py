@@ -14,9 +14,10 @@ from .attention_utils import DynamicTanh
 from .bcat import block_causal
 from .embedder import get_embedder
 from .multiscale_utils import (
-    AsymmetricFFN,
+    #AsymmetricFFN,
+    #RecombineDecoder,
+    FastOnlyRecombineDecoder,
     PoolFFN,
-    RecombineDecoder,
     SplitEncoder,
     TwoScaleTransformerEncoder,
     TwoScaleTransformerEncoderLayer,
@@ -74,6 +75,8 @@ def build_fast_to_slow_mask(
       - slow step s summarizes fast steps [s*rate, ..., (s+1)*rate-1]
       - fast time t can attend to slow step s only if t >= (s+1)*rate - 1
         (i.e., the slow summary is fully determined by past fast tokens)
+        TESTING CHANGE 4/21/2026: t >= (s+1)*rate 
+        so last (padded) slow step does not have an effect
 
     The output shape is [L_fast, L_slow] where:
       L_fast = fast_time * spatial_tokens
@@ -183,6 +186,14 @@ class MultiscaleBCAT(nn.Module):
         self.embedder = get_embedder(config.embedder, x_num, max_output_dim)
         self.flex_attn = config.get("flex_attn", False)
 
+        match config.get("first_norm", "layer"):
+            case "rms":
+                first_norm = nn.RMSNorm
+            case "dyt":
+                first_norm = DynamicTanh
+            case _:
+                first_norm = nn.LayerNorm
+
         match config.get("norm", "layer"):
             case "rms":
                 norm = nn.RMSNorm
@@ -194,10 +205,11 @@ class MultiscaleBCAT(nn.Module):
         fast_embed_dim = config.dim_emb
         embedder_dim = config.embedder.dim
         slow_embed_dim = config.get("slow_dim", config.dim_emb)
-        recombine_hidden_dim = config.get("recombine_dim", config.dim_ffn)
-        lift_hidden_dim = config.get("lift_dim", config.dim_ffn)
+        #recombine_hidden_dim = config.get("recombine_dim", config.dim_ffn)
+        #lift_hidden_dim = config.get("lift_dim", config.dim_ffn)
         pool_hidden_dim = config.get("pool_dim", config.dim_ffn)
         activation = config.get("activation", "gelu")
+        #recombine_activation = config.get("recombine_activation", activation)
 
         pool_ffn = PoolFFN(
             in_dim=embedder_dim,
@@ -208,12 +220,12 @@ class MultiscaleBCAT(nn.Module):
             dropout=config.dropout,
         )
         #lift_ffn = nn.Linear(slow_embed_dim, fast_embed_dim)
-        lift_ffn = AsymmetricFFN(
-            in_dim=slow_embed_dim, 
-            hidden_dim=lift_hidden_dim,
-            out_dim=fast_embed_dim, 
-            act=activation, 
-            dropout=config.dropout)
+        # lift_ffn = AsymmetricFFN(
+        #     in_dim=slow_embed_dim, 
+        #     hidden_dim=lift_hidden_dim,
+        #     out_dim=fast_embed_dim, 
+        #     act=activation, 
+        #     dropout=config.dropout)
 
         encoder_layer = TwoScaleTransformerEncoderLayer(
             fast_embed_dim=fast_embed_dim,
@@ -227,6 +239,7 @@ class MultiscaleBCAT(nn.Module):
             qk_norm=config.get("qk_norm", False),
             flex_attn=self.flex_attn,
             shared_scale_ffn=config.get("shared_scale_ffn", False),
+            norm=norm,
         )
         split_encoder = SplitEncoder(
             embedder=self.embedder,
@@ -234,28 +247,37 @@ class MultiscaleBCAT(nn.Module):
             pool_ffn=pool_ffn,
             spatial_tokens=config.embedder.patch_num**2,
         )
-        recombine_decoder = RecombineDecoder(
+        decoder = FastOnlyRecombineDecoder(
             fast_embed_dim=fast_embed_dim,
-            slow_embed_dim=slow_embed_dim,
-            rate=self.rate,
-            hidden_dim=recombine_hidden_dim,
-            lift_ffn=lift_ffn,
-            lift_dim=fast_embed_dim,
-            act=activation,
-            dropout=config.dropout,
-            spatial_tokens=config.embedder.patch_num**2,
+            norm=norm,
             embedder=self.embedder,
-            log_norms=config.get("log_recombine_norms", False),
-            log_norms_mode=config.get("log_recombine_norms_mode", "inference"),
-            log_once=config.get("log_once", True),
         )
+        # recombine_decoder = RecombineDecoder(
+        #     fast_embed_dim=fast_embed_dim,
+        #     slow_embed_dim=slow_embed_dim,
+        #     rate=self.rate,
+        #     hidden_dim=recombine_hidden_dim,
+        #     lift_ffn=lift_ffn,
+        #     lift_dim=fast_embed_dim,
+        #     lift_norm=norm,
+        #     act=recombine_activation,
+        #     norm=norm,
+        #     dropout=config.dropout,
+        #     spatial_tokens=config.embedder.patch_num**2,
+        #     embedder=self.embedder,
+        #     log_norms=config.get("log_recombine_norms", False),
+        #     log_norms_mode=config.get("log_recombine_norms_mode", "inference"),
+        #     log_once=config.get("log_once", True),
+        # )
         self.transformer = TwoScaleTransformerEncoder(
             encoder_layer=encoder_layer,
             num_layers=config.n_layer,
-            norm_fast=norm(fast_embed_dim, eps=1e-5) if config.norm_first else None,
-            norm_slow=norm(slow_embed_dim, eps=1e-5) if config.norm_first else None,
+            norm_fast=first_norm(fast_embed_dim, eps=1e-5) 
+            if config.norm_first else None,
+            norm_slow=first_norm(slow_embed_dim, eps=1e-5) 
+            if config.norm_first else None,
             split_encoder=split_encoder,
-            recombine_decoder=recombine_decoder,
+            decoder=decoder,
             config=config,
         )
 
@@ -316,10 +338,10 @@ class MultiscaleBCAT(nn.Module):
         s = "\n"
         s += f"\tEncoder:        {sum([p.numel() for p in self.transformer.split_encoder.parameters() if p.requires_grad]):,}\n"
         s += f"\tTransformer:    {sum([p.numel() for p in self.transformer.parameters() if p.requires_grad]):,}"
-        if self.transformer.recombine_decoder is not None:
+        if self.transformer.decoder is not None:
             s += (
                 f"\tDecoder:      "
-                f"{sum([p.numel() for p in self.transformer.recombine_decoder.parameters() if p.requires_grad]):,}"
+                f"{sum([p.numel() for p in self.transformer.decoder.parameters() if p.requires_grad]):,}"
             )
         return s
 

@@ -298,12 +298,15 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         qk_norm: bool = False,
         flex_attn: bool = False,
         shared_scale_ffn: bool = False,
+        disable_slow_scale: bool = False, ### FLAG FOR DEBUGGING W/O SLOW SCALE
         norm: type[nn.Module] = nn.LayerNorm,
     ) -> None:
         super().__init__()
         self.fast_embed_dim = fast_embed_dim
         self.slow_embed_dim = slow_embed_dim
         self.rate = rate
+
+        self.disable_slow_scale = True #disable_slow_scale # True
 
         if fast_embed_dim != slow_embed_dim:
             raise ValueError("Cross-attention requires fast_embed_dim == slow_embed_dim.")
@@ -316,9 +319,14 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         self.self_attn_slow = SelfMHA(
             slow_embed_dim, num_heads=num_heads, dropout=dropout, bias=bias, qk_norm=qk_norm
         )
-        self.cross_attn_fast = CrossMHA(
-            fast_embed_dim, num_heads=num_heads, dropout=dropout, bias=bias, qk_norm=qk_norm
-        )
+        if self.disable_slow_scale: # no bias from slow scale either
+            self.cross_attn_fast = CrossMHA(
+                fast_embed_dim, num_heads=num_heads, dropout=dropout, bias=False, qk_norm=qk_norm
+            )
+        else:
+            self.cross_attn_fast = CrossMHA(
+                fast_embed_dim, num_heads=num_heads, dropout=dropout, bias=bias, qk_norm=qk_norm
+            )
         self.cross_attn_slow = CrossMHA(
             slow_embed_dim, num_heads=num_heads, dropout=dropout, bias=bias, qk_norm=qk_norm
         )
@@ -372,6 +380,9 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         expected_slow_time = (fast_time - 1) // self.rate + 1 # ceil(fast_time/rate)
         if slow_time != expected_slow_time:
             raise ValueError(f"Temporal sizes mismatch: L_fast={Lf}, rate={self.rate}, but L_slow={Ls}.")
+
+        if self.disable_slow_scale:
+            x_slow *= 0.0
 
         # Residual for attention block
         x_f_res = x_fast
@@ -465,7 +476,11 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         )
         return z_self, z_cross
  
-class RecombineDecoder(nn.Module):
+class Decoder(nn.Module):
+    """Common interface for recombination decoders."""
+
+
+class RecombineDecoder(Decoder):
     """
     Recombine (z_fast, z_slow) into a fast-length sequence via channel concatenation
     after lifting z_slow to the fast time scale, followed by a 2-layer MLP to project
@@ -480,7 +495,9 @@ class RecombineDecoder(nn.Module):
         embedder: nn.Module,
         lift_ffn: Optional[nn.Module] = None,
         lift_dim: Optional[int] = None,
+        lift_norm: Optional[type[nn.Module]] = None,
         act: str = "gelu",
+        norm: type[nn.Module] = nn.LayerNorm,
         dropout: float = 0.0,
         time_dim: int = 1,
         spatial_tokens: int = 1,
@@ -493,6 +510,7 @@ class RecombineDecoder(nn.Module):
         self.time_dim = time_dim
         self.spatial_tokens = spatial_tokens
         self.lift_ffn = lift_ffn
+        self.slow_embed_dim = slow_embed_dim
         self.embedder = embedder
 
         # slow/fast norm logging
@@ -510,6 +528,7 @@ class RecombineDecoder(nn.Module):
                 lift_dim = lift_ffn.out_features
             elif hasattr(lift_ffn, "out_dim"):
                 lift_dim = lift_ffn.out_dim
+        self.lift_norm = lift_norm(lift_dim) if lift_norm is not None else None
         in_dim = fast_embed_dim + lift_dim
         self.fc1 = nn.Linear(in_dim, hidden_dim)
         if act.endswith("glu"):
@@ -519,14 +538,18 @@ class RecombineDecoder(nn.Module):
         self.activation = get_activation(act)()
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.fc2 = nn.Linear(hidden_dim, fast_embed_dim)
-        self.norm_fast = nn.LayerNorm(fast_embed_dim)
-        self.norm_slow = nn.LayerNorm(slow_embed_dim)
-        #self.norm_fast = nn.LayerNorm(in_dim)
+        #self.norm_fast = nn.LayerNorm(fast_embed_dim)
+        #self.norm_slow = nn.LayerNorm(slow_embed_dim)
+        self.norm_fast = norm(in_dim) # nn.LayerNorm(in_dim)
 
     def forward(self, z_fast: torch.Tensor, z_slow: torch.Tensor) -> torch.Tensor:
         if self.training:
             self._has_logged = False
         # Align time scales by lifting z_slow to the fast length
+        slow_feedback_off = False # debug mode: pull zeros from slow scale
+        # if slow_feedback_off:
+        #     z_slow_lift = z_fast.new_zeros(*z_fast.shape[:-1], self.slow_embed_dim)
+        # else:
         z_slow_lift = lift(
             z_slow,
             rate=self.rate,
@@ -534,6 +557,13 @@ class RecombineDecoder(nn.Module):
             ffn=self.lift_ffn,
             spatial_tokens=self.spatial_tokens,
         )  # [..., L_fast, slow_embed_dim]
+        
+        if self.lift_norm is not None:
+            z_slow_lift = self.lift_norm(z_slow_lift)
+
+        if slow_feedback_off:
+            z_slow_lift *= 0.0
+
         if z_slow_lift.size(self.time_dim) > z_fast.size(self.time_dim):
             z_slow_lift = z_slow_lift.narrow(self.time_dim, 0, z_fast.size(self.time_dim))
         if z_slow_lift.size(self.time_dim) != z_fast.size(self.time_dim):
@@ -550,11 +580,11 @@ class RecombineDecoder(nn.Module):
             )
             if self.log_once:
                 self._has_logged = True
-        z_fast_norm = self.norm_fast(z_fast)
-        z_slow_norm = self.norm_slow(z_slow_lift)
-        x = torch.cat([z_fast_norm, z_slow_norm], dim=-1)
-        #x = self.norm_fast(x)
-        # TO DO: consider adding second layer
+        #z_fast_norm = self.norm_fast(z_fast)
+        #z_slow_norm = self.norm_slow(z_slow_lift)
+        #x = torch.cat([z_fast_norm, z_slow_norm], dim=-1)
+        x = torch.cat([z_fast, z_slow_lift], dim=-1)
+        x = self.norm_fast(x)
         if self.fc_gate is None:
             y = z_fast + self.fc2(self.dropout(self.activation(self.fc1(x))))
         else:
@@ -574,6 +604,27 @@ class RecombineDecoder(nn.Module):
             return False
         return True
 
+class FastOnlyRecombineDecoder(Decoder):
+    """
+    Decoder variant that ignores the slow scale entirely.
+    Applies normalization on the fast scale and decodes it.
+    """
+
+    def __init__(
+        self,
+        fast_embed_dim: int,
+        embedder: nn.Module,
+        norm: type[nn.Module] = nn.LayerNorm,
+        **kwargs,
+    ) -> None:
+        super().__init__()
+        self.embedder = embedder
+        self.norm_fast = norm(fast_embed_dim)
+
+    def forward(self, z_fast: torch.Tensor) -> torch.Tensor:
+        y = self.norm_fast(z_fast)
+        return self.embedder.decode(y)
+
 class TwoScaleTransformerEncoder(nn.Module):
     """
     Stack of TwoScaleTransformerEncoderLayer layers, mirroring CustomTransformerEncoder but
@@ -587,7 +638,7 @@ class TwoScaleTransformerEncoder(nn.Module):
         norm_fast: Optional[nn.Module] = None,
         norm_slow: Optional[nn.Module] = None,
         split_encoder: Optional[SplitEncoder] = None,
-        recombine_decoder: Optional[RecombineDecoder] = None,
+        decoder: Optional[Decoder] = None,
         config=None,
     ) -> None:
         super().__init__()
@@ -597,7 +648,7 @@ class TwoScaleTransformerEncoder(nn.Module):
         self.norm_fast = norm_fast
         self.norm_slow = norm_slow
         self.split_encoder = split_encoder
-        self.recombine_decoder = recombine_decoder
+        self.decoder = decoder
         if config is not None and config.rotary:
             self.rotary_emb = RotaryEmbedding(dim=config.dim_emb // config.n_head // 2)
             self.rotary = True
@@ -661,8 +712,8 @@ class TwoScaleTransformerEncoder(nn.Module):
         Returns:
           y: [B, L, fast_embed_dim]
         """
-        if self.split_encoder is None or self.recombine_decoder is None:
-            raise ValueError("forward_full requires split_encoder and recombine_decoder to be set.")
+        if self.split_encoder is None or self.decoder is None:
+            raise ValueError("forward_full requires split_encoder and decoder to be set.")
 
         x_fast, x_slow = self.split_encoder(*args, **kwargs)
         z_fast, z_slow = self._apply_layers(
@@ -673,7 +724,11 @@ class TwoScaleTransformerEncoder(nn.Module):
             spatial_tokens=spatial_tokens,
             rotary_emb=rotary_emb,
         )
-        y = self.recombine_decoder(z_fast, z_slow)
+        match self.decoder:
+            case FastOnlyRecombineDecoder():
+                y = self.decoder(z_fast)
+            case _:
+                y = self.decoder(z_fast, z_slow)
         return y
 
     def _apply_layers(
@@ -1060,7 +1115,7 @@ if __name__ == "__main__":
         time_dim=1,
         spatial_tokens=spatial_tokens,
     )
-    recombine_decoder = RecombineDecoder(
+    decoder = RecombineDecoder(
         fast_embed_dim=fast_embed_dim,
         slow_embed_dim=slow_embed_dim,
         rate=rate,
@@ -1077,7 +1132,7 @@ if __name__ == "__main__":
         norm_fast=nn.LayerNorm(fast_embed_dim),
         norm_slow=nn.LayerNorm(slow_embed_dim),
         split_encoder=split_encoder,
-        recombine_decoder=recombine_decoder,
+        decoder=decoder,
     )
 
     fast_seq_len = time_len_fast * spatial_tokens

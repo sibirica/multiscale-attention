@@ -25,6 +25,10 @@ loss_start_idx: ${.input_len} # (only for autoregressive models) Start index for
 noise: 0 # Add noise to data (0 to disable)
 noise_type: additive # Type of noise (select from [additive, multiplicative])
 
+# For multiscale BCAT autoregressive training, 
+# sometimes repeat the penultimate input frame as the last input frame
+simulated_padding_prob: 0 
+
 flip: 0 # randomly flip the data in space dimensions
 rotate: 0 # right angle rotations in space dimensions
 

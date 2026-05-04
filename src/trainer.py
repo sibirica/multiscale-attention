@@ -421,6 +421,13 @@ class Trainer(object):
         """
         data_output/data_label: Tensor (bs, output_len, x_num, x_num, dim)
         """
+        debug_loss_first_k = 2 # compute loss only on the first k steps
+        if debug_loss_first_k is not None:
+            data_output = data_output[:, :debug_loss_first_k]
+            data_label = data_label[:, :debug_loss_first_k]
+            if data_mask.size(1) > 1:
+                data_mask = data_mask[:, :debug_loss_first_k]
+
         # prepare weights for loss function
         if self.params.loss_weight == "l2":
             weight = torch.linalg.vector_norm(data_label, dim=(2, 3), keepdim=True)  # (bs, output_len, 1, 1, dim)
@@ -510,7 +517,7 @@ class Trainer(object):
                 model_input["input_len"] = self.params.get("loss_start_idx", input_len)
                 data_label = model_input["data"][:, model_input["input_len"] :]
 
-                t_num = data_mask.size(1)  # (bs, 1/output_len, 1, 1, dim)
+                t_num = data_mask.size(1)  # (bs, 1 | output_len, 1, 1, dim)
                 if t_num > 1 and (input_len - model_input["input_len"]) > 0:
                     # mixed length inputs
                     input_mask = data_mask[:, :1].expand(
@@ -535,6 +542,12 @@ class Trainer(object):
                         # avoid noise in padding locations for mixed length inputs
                         noise = noise * data_mask
                     model_input["data"][:, model_input["input_len"] :] += noise
+
+                simulated_padding_prob = self.params.get("simulated_padding_prob", 0)
+                if simulated_padding_prob > 0 and data_input.size(1) > 1:
+                    simulate_padding = torch.rand((), device=data_input.device) < simulated_padding_prob
+                    if simulate_padding:
+                        model_input["data"][:, input_len - 1] = model_input["data"][:, input_len - 2]
 
             else:
                 model_input["data_input"] = data_input
