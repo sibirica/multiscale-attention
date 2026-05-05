@@ -113,8 +113,19 @@ def build_slow_to_fast_mask(
 
     Mapping rule (matches cross_attn2):
       - slow step s represents fast range [s*rate, ..., (s+1)*rate-1]
-      - slow step s can attend to fast time t if t >= s*rate
-        (allow contemporaneous and past fast tokens)
+      - slow step s can attend to fast time t iff t < (s+1)*rate, i.e. only
+        fast tokens whose index is at most the latest fast index slow_s
+        could plausibly summarize.
+
+    Causality guarantee. Combined with build_fast_to_slow_mask's rule
+    (fast_t reads slow_s only when t >= (s+1)*rate - 1), every fast
+    output position depends only on fast positions with the same or
+    earlier fast index, so future information cannot reach past
+    outputs through the slow stream. Without this upper bound the
+    previous formulation (`t >= s*rate`) let slow_0 attend to ALL fast
+    tokens; that future information then leaked back into past fast
+    outputs through subsequent layers, and was the cause of the train
+    vs. autoregressive-eval gap that grew with t_num.
 
     The output shape is [L_slow, L_fast] where:
       L_slow = slow_time * spatial_tokens
@@ -133,7 +144,7 @@ def build_slow_to_fast_mask(
         )
     fast_t = torch.arange(fast_time, device=device).repeat_interleave(spatial_tokens)
     slow_t = torch.arange(slow_time, device=device).repeat_interleave(spatial_tokens)
-    allow = fast_t[None, :] >= (slow_t[:, None] * rate)
+    allow = fast_t[None, :] < ((slow_t[:, None] + 1) * rate)
     return _dense_mask_from_allow(allow, dtype=dtype)
 
 
@@ -162,7 +173,7 @@ def _block_slow_to_fast(b, h, q_idx, kv_idx, block_size: int, rate: int) -> torc
     """
     s_t = q_idx // block_size
     f_t = kv_idx // block_size
-    return f_t >= (s_t * rate)
+    return f_t < ((s_t + 1) * rate)
 
 
 logger = getLogger()
@@ -219,13 +230,6 @@ class MultiscaleBCAT(nn.Module):
             act=activation,
             dropout=config.dropout,
         )
-        #lift_ffn = nn.Linear(slow_embed_dim, fast_embed_dim)
-        # lift_ffn = AsymmetricFFN(
-        #     in_dim=slow_embed_dim, 
-        #     hidden_dim=lift_hidden_dim,
-        #     out_dim=fast_embed_dim, 
-        #     act=activation, 
-        #     dropout=config.dropout)
 
         encoder_layer = TwoScaleTransformerEncoderLayer(
             fast_embed_dim=fast_embed_dim,
@@ -252,23 +256,6 @@ class MultiscaleBCAT(nn.Module):
             norm=norm,
             embedder=self.embedder,
         )
-        # recombine_decoder = RecombineDecoder(
-        #     fast_embed_dim=fast_embed_dim,
-        #     slow_embed_dim=slow_embed_dim,
-        #     rate=self.rate,
-        #     hidden_dim=recombine_hidden_dim,
-        #     lift_ffn=lift_ffn,
-        #     lift_dim=fast_embed_dim,
-        #     lift_norm=norm,
-        #     act=recombine_activation,
-        #     norm=norm,
-        #     dropout=config.dropout,
-        #     spatial_tokens=config.embedder.patch_num**2,
-        #     embedder=self.embedder,
-        #     log_norms=config.get("log_recombine_norms", False),
-        #     log_norms_mode=config.get("log_recombine_norms_mode", "inference"),
-        #     log_once=config.get("log_once", True),
-        # )
         self.transformer = TwoScaleTransformerEncoder(
             encoder_layer=encoder_layer,
             num_layers=config.n_layer,
@@ -535,54 +522,3 @@ class MultiscaleBCAT(nn.Module):
 
         return data_all[:, input_len:]
         
-        # OLD GENERATION CODE: attempt to do one slow block forward
-        # t_num = times.size(1)
-        # output_len = t_num - input_len
-        # bs, _, x_num, _, data_dim = data_input.size()
-
-        # data_all = torch.zeros(bs, t_num, x_num, x_num, data_dim, dtype=data_input.dtype, device=data_input.device)
-        # data_all[:, :input_len] = data_input
-        # cur_len = input_len
-        # # NOTE: kv_cache is disabled for now.
-
-        # remaining = output_len
-        # # First block aligns to the next multiple of rate (or full rate if already aligned).
-        # # Outputs past desired length are not generated.
-        # step_len = (-cur_len) % self.rate
-        # if step_len == 0:
-        #     step_len = self.rate
-        # while remaining > 0:
-        #     block_len = min(step_len, remaining)
-        #     cur_data_input = data_all[:, :cur_len]  # (bs, cur_len, x_num, x_num, data_dim)
-
-        #     fast_time = cur_len
-        #     slow_time = (fast_time - 1) // self.rate + 1
-        #     masks = self._build_masks(
-        #         fast_time,
-        #         slow_time,
-        #         device=cur_data_input.device,
-        #         dtype=cur_data_input.dtype,
-        #     )
-
-        #     # does this need SDPA kernel line? -> only if flex_attn is false
-        #     cur_data_encoded = self.transformer(
-        #             data=cur_data_input,
-        #             times=times[:, :cur_len],
-        #             masks=masks,
-        #             is_causal=False,
-        #             spatial_tokens=self.seq_len_per_step,
-        #             full=True,
-        #     )
-
-        #     new_output = cur_data_encoded[:, -block_len:]  # (bs, block_len, x_num, x_num, data_dim)
-        #     new_output = new_output * data_mask  # (bs, block_len, x_num, x_num, data_dim)
-
-        #     if carry_over_c >= 0:
-        #         new_output[:, :, :, :, carry_over_c] = data_all[:, 0, :, :, carry_over_c]
-
-        #     data_all[:, cur_len : cur_len + block_len] = new_output
-        #     cur_len += block_len
-        #     remaining -= block_len
-        #     step_len = self.rate
-
-        # return data_all[:, input_len:]

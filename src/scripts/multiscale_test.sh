@@ -1,4 +1,4 @@
-expid=multiscale_bcat_30
+expid=multiscale_bcat_31
 #expid=bcat_baseline_3
 #python main.py exp_id=${expid} batch_size=16 data=fluids_arena compile=1 optim=adamw model=multiscale_bcat model.flex_attn=1 #dryrun=1
 torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_id=${expid} batch_size=16 data=fluids_arena compile=1 optim=adamw model=multiscale_bcat model.flex_attn=1

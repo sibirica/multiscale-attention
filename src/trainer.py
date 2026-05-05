@@ -421,7 +421,7 @@ class Trainer(object):
         """
         data_output/data_label: Tensor (bs, output_len, x_num, x_num, dim)
         """
-        debug_loss_first_k = 2 # compute loss only on the first k steps
+        debug_loss_first_k = None # compute loss only on the first k steps
         if debug_loss_first_k is not None:
             data_output = data_output[:, :debug_loss_first_k]
             data_label = data_label[:, :debug_loss_first_k]
