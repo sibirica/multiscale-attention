@@ -12,6 +12,7 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.attention.flex_attention import create_block_mask
 
 from .attention_utils import DynamicTanh
+from .bcat import block_causal
 from .embedder import get_embedder
 from .multiscale_utils import (
     #AsymmetricFFN,
@@ -28,63 +29,63 @@ from .kv_cache import KVCache
 # flex ``mask_mod``: when sliding window is disabled, ``_effective_window`` maps
 # ``None`` / non-positive ``window`` to a large bound so ``(diff) < window`` does not bind.
 
-_WINDOW_UNBOUNDED = 2**30
+# _WINDOW_UNBOUNDED = 2**30
 
 
-def _effective_window(w: Optional[int]) -> int:
-    if w is None or w <= 0:
-        return _WINDOW_UNBOUNDED
-    return int(w)
+# def _effective_window(w: Optional[int]) -> int:
+#     if w is None or w <= 0:
+#         return _WINDOW_UNBOUNDED
+#     return int(w)
 
 
-def _block_self(
-    b, h, q_idx, kv_idx, block_size: int, window: Optional[int]
-) -> torch.Tensor:
-    w = _effective_window(window)
-    q_t = torch.as_tensor(q_idx, dtype=torch.long) // block_size
-    kv_t = torch.as_tensor(kv_idx, dtype=torch.long) // block_size
-    causal = q_t >= kv_t
-    win_ok = (q_t - kv_t) < w
-    return causal & win_ok
+# def _block_self(
+#     b, h, q_idx, kv_idx, block_size: int, window: Optional[int]
+# ) -> torch.Tensor:
+#     w = _effective_window(window)
+#     q_t = torch.as_tensor(q_idx, dtype=torch.long) // block_size
+#     kv_t = torch.as_tensor(kv_idx, dtype=torch.long) // block_size
+#     causal = q_t >= kv_t
+#     win_ok = (q_t - kv_t) < w
+#     return causal & win_ok
 
 
-def _block_fast_to_slow(
-    b, h, q_idx, kv_idx, block_size: int, rate: int, *, window: Optional[int] = None
-) -> torch.Tensor:
-    w = _effective_window(window)
-    q_t = torch.as_tensor(q_idx, dtype=torch.long) // block_size
-    kv_t = torch.as_tensor(kv_idx, dtype=torch.long) // block_size
-    f_t, s_t = q_t, kv_t
-    base_ok = f_t >= ((s_t + 1) * rate - 1)
-    s_max = ((f_t + 1) // rate) - 1
-    win_ok = (s_max - s_t) < w
-    return base_ok & win_ok
+# def _block_fast_to_slow(
+#     b, h, q_idx, kv_idx, block_size: int, rate: int, *, window: Optional[int] = None
+# ) -> torch.Tensor:
+#     w = _effective_window(window)
+#     q_t = torch.as_tensor(q_idx, dtype=torch.long) // block_size
+#     kv_t = torch.as_tensor(kv_idx, dtype=torch.long) // block_size
+#     f_t, s_t = q_t, kv_t
+#     base_ok = f_t >= ((s_t + 1) * rate - 1)
+#     s_max = ((f_t + 1) // rate) - 1
+#     win_ok = (s_max - s_t) < w
+#     return base_ok & win_ok
 
 
-def _block_slow_to_fast(
-    b, h, q_idx, kv_idx, block_size: int, rate: int, *, window: Optional[int] = None
-) -> torch.Tensor:
-    w = _effective_window(window)
-    q_t = torch.as_tensor(q_idx, dtype=torch.long) // block_size
-    kv_t = torch.as_tensor(kv_idx, dtype=torch.long) // block_size
-    s_t, f_t = q_t, kv_t
-    base_ok = f_t < ((s_t + 1) * rate)
-    win_ok = ((s_t + 1) * rate - 1 - f_t) < w
-    return base_ok & win_ok
+# def _block_slow_to_fast(
+#     b, h, q_idx, kv_idx, block_size: int, rate: int, *, window: Optional[int] = None
+# ) -> torch.Tensor:
+#     w = _effective_window(window)
+#     q_t = torch.as_tensor(q_idx, dtype=torch.long) // block_size
+#     kv_t = torch.as_tensor(kv_idx, dtype=torch.long) // block_size
+#     s_t, f_t = q_t, kv_t
+#     base_ok = f_t < ((s_t + 1) * rate)
+#     win_ok = ((s_t + 1) * rate - 1 - f_t) < w
+#     return base_ok & win_ok
 
 
-def _block_self_shifted(
-    b, h, q_idx, kv_idx, *, q_shift: int, block_size: int, window: Optional[int]
-) -> torch.Tensor:
-    return _block_self(b, h, q_idx + q_shift, kv_idx, block_size, window)
+# def _block_self_shifted(
+#     b, h, q_idx, kv_idx, *, q_shift: int, block_size: int, window: Optional[int]
+# ) -> torch.Tensor:
+#     return _block_self(b, h, q_idx + q_shift, kv_idx, block_size, window)
 
 
-def _block_fast_to_slow_shifted(
-    b, h, q_idx, kv_idx, *, q_shift: int, block_size: int, rate: int, window: Optional[int]
-) -> torch.Tensor:
-    return _block_fast_to_slow(
-        b, h, q_idx + q_shift, kv_idx, block_size, rate, window=window
-    )
+# def _block_fast_to_slow_shifted(
+#     b, h, q_idx, kv_idx, *, q_shift: int, block_size: int, rate: int, window: Optional[int]
+# ) -> torch.Tensor:
+#     return _block_fast_to_slow(
+#         b, h, q_idx + q_shift, kv_idx, block_size, rate, window=window
+#     )
 
 
 def build_self_attn_mask(
@@ -113,17 +114,21 @@ def build_self_attn_mask(
     """
     if use_block_mask:
         q_len = time_len * spatial_tokens
-        mask_fn = partial(_block_self, block_size=spatial_tokens, window=window)
+        # mask_fn = partial(_block_self, block_size=spatial_tokens, window=window)
+        if window is None:
+            mask_fn = partial(block_causal, block_size=spatial_tokens)
+        else:
+            mask_fn = partial(
+                _block_self_window, block_size=spatial_tokens, window=window
+            )
         return create_block_mask(mask_fn, None, None, q_len, q_len, device=device)
     if dtype is None:
         dtype = torch.get_default_dtype()
-    time_causal = torch.tril(torch.ones(time_len, time_len, device=device, dtype=torch.bool))
+    time_mask = torch.tril(torch.ones(time_len, time_len, device=device, dtype=torch.bool))
     if window is not None:
         idx = torch.arange(time_len, device=device)
-        time_window = (idx[:, None] - idx[None, :]) < window
-        time_mask = time_causal & time_window
-    else:
-        time_mask = time_causal
+        within = (idx[:, None] - idx[None, :]) < window
+        time_mask = time_mask & within
     block = torch.ones(spatial_tokens, spatial_tokens, device=device, dtype=torch.bool)
     allow = torch.kron(time_mask, block)
     return _dense_mask_from_allow(allow, dtype=dtype)
@@ -160,13 +165,25 @@ def build_fast_to_slow_mask(
     if use_block_mask:
         q_len = fast_time * spatial_tokens
         kv_len = slow_time * spatial_tokens
-        mask_fn = partial(
-            _block_fast_to_slow,
-            spatial_tokens,
-            rate,
-            window=window,
+        # mask_fn = partial(
+        #     _block_fast_to_slow,
+        #     spatial_tokens,
+        #     rate,
+        #     window=window,
+        return create_block_mask(
+            partial(
+                _block_fast_to_slow,
+                block_size=spatial_tokens,
+                rate=rate,
+                window=window,
+            ),
+            None,
+            None,
+            q_len,
+            kv_len,
+            device=device,
         )
-        return create_block_mask(mask_fn, None, None, q_len, kv_len, device=device)
+        # return create_block_mask(mask_fn, None, None, q_len, kv_len, device=device)
     if dtype is None:
         dtype = torch.get_default_dtype()
     fast_t = torch.arange(fast_time, device=device).repeat_interleave(spatial_tokens)
@@ -174,7 +191,75 @@ def build_fast_to_slow_mask(
     allow = fast_t[:, None] >= ((slow_t[None, :] + 1) * rate - 1)
     if window is not None:
         s_max = ((fast_t[:, None] + 1) // rate) - 1
-        allow = allow & ((s_max - slow_t[None, :]) < window)
+        within = (s_max - slow_t[None, :]) < window
+        allow = allow & within
+    return _dense_mask_from_allow(allow, dtype=dtype)
+
+
+def build_slow_to_fast_mask(
+    fast_time: int,
+    slow_time: int,
+    rate: int,
+    spatial_tokens: int,
+    device: torch.device,
+    dtype: Optional[torch.dtype] = None,
+    use_block_mask: bool = False,
+    window: Optional[int] = None,
+) -> torch.Tensor:
+    """
+    Build a causal cross-attention mask for slow queries attending to fast keys.
+
+    Mapping rule (matches cross_attn2):
+      - slow step s represents fast range [s*rate, ..., (s+1)*rate-1]
+      - slow step s can attend to fast time t iff t < (s+1)*rate, i.e. only
+        fast tokens whose index is at most the latest fast index slow_s
+        could plausibly summarize.
+
+    If ``window`` is provided, additionally restrict each slow query to the
+    ``window`` most recent allowed fast keys. With t_max(s) = (s+1)*rate - 1
+    the latest fast index a causal s_s may read, the windowed rule keeps
+    only t in [t_max(s) - window + 1, t_max(s)]. With window=rate, slow_s
+    attends only to the rate fast tokens it natively summarizes.
+
+    Causality guarantee. Combined with build_fast_to_slow_mask's rule
+    (fast_t reads slow_s only when t >= (s+1)*rate - 1), every fast
+    output position depends only on fast positions with the same or
+    earlier fast index, so future information cannot reach past
+    outputs through the slow stream. Without this upper bound the
+    previous formulation (`t >= s*rate`) let slow_0 attend to ALL fast
+    tokens; that future information then leaked back into past fast
+    outputs through subsequent layers, and was the cause of the train
+    vs. autoregressive-eval gap that grew with t_num.
+
+    The output shape is [L_slow, L_fast] where:
+      L_slow = slow_time * spatial_tokens
+      L_fast = fast_time * spatial_tokens
+    """
+    if use_block_mask:
+        q_len = slow_time * spatial_tokens
+        kv_len = fast_time * spatial_tokens
+        return create_block_mask(
+            partial(
+                _block_slow_to_fast,
+                block_size=spatial_tokens,
+                rate=rate,
+                window=window,
+            ),
+            None,
+            None,
+            q_len,
+            kv_len,
+            device=device,
+        )
+    if dtype is None:
+        dtype = torch.get_default_dtype()
+    fast_t = torch.arange(fast_time, device=device).repeat_interleave(spatial_tokens)
+    slow_t = torch.arange(slow_time, device=device).repeat_interleave(spatial_tokens)
+    allow = fast_t[None, :] < ((slow_t[:, None] + 1) * rate)
+    if window is not None:
+        t_max = (slow_t[:, None] + 1) * rate - 1
+        within = (t_max - fast_t[None, :]) < window
+        allow = allow & within
     return _dense_mask_from_allow(allow, dtype=dtype)
 
 
@@ -227,69 +312,84 @@ def build_fast_self_block_mask_incremental(
     return create_block_mask(mask_fn, None, None, nf_query, lf_total, device=device)
 
 
-def build_slow_to_fast_mask(
-    fast_time: int,
-    slow_time: int,
-    rate: int,
-    spatial_tokens: int,
-    device: torch.device,
-    dtype: Optional[torch.dtype] = None,
-    use_block_mask: bool = False,
-    window: Optional[int] = None,
+def _dense_mask_from_allow(allow: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """
+    Convert a boolean allow matrix into an SDPA-compatible mask.
+    True -> 0 (keep), False -> -inf (block).
+    """
+    return torch.zeros_like(allow, dtype=dtype).masked_fill(~allow, float("-inf"))
+
+
+def _block_self_window(
+    b, h, q_idx, kv_idx, block_size: int, window: int
+) -> torch.Tensor:
+    """BlockMask callback for windowed causal self-attention."""
+    q_t = q_idx // block_size
+    k_t = kv_idx // block_size
+    return (q_t >= k_t) & ((q_t - k_t) < window)
+
+
+def _block_fast_to_slow(
+    b, h, q_idx, kv_idx, block_size: int, rate: int, window: Optional[int] = None
 ) -> torch.Tensor:
     """
-    Build a causal cross-attention mask for slow queries attending to fast keys.
-
-    Mapping rule (matches cross_attn2):
-      - slow step s represents fast range [s*rate, ..., (s+1)*rate-1]
-      - slow step s can attend to fast time t iff t < (s+1)*rate, i.e. only
-        fast tokens whose index is at most the latest fast index slow_s
-        could plausibly summarize.
-
-    If ``window`` is provided, additionally restrict each slow query to the
-    ``window`` most recent allowed fast keys. With t_max(s) = (s+1)*rate - 1
-    the latest fast index a causal s_s may read, the windowed rule keeps
-    only t in [t_max(s) - window + 1, t_max(s)]. With window=rate, slow_s
-    attends only to the rate fast tokens it natively summarizes.
-
-    Causality guarantee. Combined with build_fast_to_slow_mask's rule
-    (fast_t reads slow_s only when t >= (s+1)*rate - 1), every fast
-    output position depends only on fast positions with the same or
-    earlier fast index, so future information cannot reach past
-    outputs through the slow stream. Without this upper bound the
-    previous formulation (`t >= s*rate`) let slow_0 attend to ALL fast
-    tokens; that future information then leaked back into past fast
-    outputs through subsequent layers, and was the cause of the train
-    vs. autoregressive-eval gap that grew with t_num.
-
-    The output shape is [L_slow, L_fast] where:
-      L_slow = slow_time * spatial_tokens
-      L_fast = fast_time * spatial_tokens
+    BlockMask callback for fast->slow attention.
+    q_idx and kv_idx are token indices; integer divide by block_size to get time index.
     """
-    if use_block_mask:
-        q_len = slow_time * spatial_tokens
-        kv_len = fast_time * spatial_tokens
-        mask_fn = partial(
-            _block_slow_to_fast,
-            spatial_tokens,
-            rate,
-            window=window,
-        )
-        return create_block_mask(mask_fn, None, None, q_len, kv_len, device=device)
-    if dtype is None:
-        dtype = torch.get_default_dtype()
-    fast_t = torch.arange(fast_time, device=device).repeat_interleave(spatial_tokens)
-    slow_t = torch.arange(slow_time, device=device).repeat_interleave(spatial_tokens)
-    allow = fast_t[None, :] < ((slow_t[:, None] + 1) * rate)
-    if window is not None:
-        t_max = (slow_t[:, None] + 1) * rate - 1
-        allow = allow & ((t_max - fast_t[None, :]) < window)
-    return _dense_mask_from_allow(allow, dtype=dtype)
+    f_t = q_idx // block_size
+    s_t = kv_idx // block_size
+    causal = f_t >= ((s_t + 1) * rate - 1)
+    if window is None:
+        return causal
+    s_max = ((f_t + 1) // rate) - 1
+    return causal & ((s_max - s_t) < window)
 
 
-def _dense_mask_from_allow(allow: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
-    """SDPA additive mask: True -> 0, False -> -inf."""
-    return torch.zeros_like(allow, dtype=dtype).masked_fill(~allow, float("-inf"))
+def _block_slow_to_fast(
+    b, h, q_idx, kv_idx, block_size: int, rate: int, window: Optional[int] = None
+) -> torch.Tensor:
+    """
+    BlockMask callback for slow->fast attention.
+    q_idx and kv_idx are token indices; integer divide by block_size to get time index.
+    """
+    s_t = q_idx // block_size
+    f_t = kv_idx // block_size
+    causal = f_t < ((s_t + 1) * rate)
+    if window is None:
+        return causal
+    t_max = (s_t + 1) * rate - 1
+    return causal & ((t_max - f_t) < window)
+
+
+def _block_self_shifted(
+    b,
+    h,
+    q_idx,
+    kv_idx,
+    *,
+    q_shift: int,
+    block_size: int,
+    window: Optional[int] = None,
+) -> torch.Tensor:
+    if window is None:
+        return block_causal(b, h, q_idx + q_shift, kv_idx, block_size)
+    return _block_self_window(b, h, q_idx + q_shift, kv_idx, block_size, window)
+
+
+def _block_fast_to_slow_shifted(
+    b,
+    h,
+    q_idx,
+    kv_idx,
+    *,
+    q_shift: int,
+    block_size: int,
+    rate: int,
+    window: Optional[int] = None,
+) -> torch.Tensor:
+    return _block_fast_to_slow(
+        b, h, q_idx + q_shift, kv_idx, block_size, rate, window
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -356,10 +456,10 @@ class MultiscaleBCAT(nn.Module):
         if config.get("kv_cache", False) and config.get("rotary", False):
             raise ValueError("MultiscaleBCAT kv_cache rollout requires rotary=0.")
 
-        if config.get("kv_cache", False) and self.flex_attn:
-            import torch._dynamo.config as dynamo_config
-
-            dynamo_config.recompile_limit = 128
+        # if config.get("kv_cache", False) and self.flex_attn:
+        #     import torch._dynamo.config as dynamo_config
+        #
+        #     dynamo_config.recompile_limit = 128
 
         # Optional sliding-window restriction on top of the causal masks. When
         # limit_window=False (default), all windows are None -> pure causal.

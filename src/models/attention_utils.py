@@ -157,7 +157,7 @@ class MultiheadAttention(nn.Module):
         output = output.transpose(1, 2).contiguous().view(bs, seq_len, -1)
         return self.out_proj(output)
 
-
+# NOTE: contiguous_cached used for multiscale kv cache
 class MultiheadFlexAttention(MultiheadAttention):
 
     def __init__(
@@ -170,9 +170,9 @@ class MultiheadFlexAttention(MultiheadAttention):
         *,
         contiguous_cached: bool = False,
     ):
-        """If ``contiguous_cached``, contiguous Q/K/V before flex post-cache (multiscale KV rollout); compiled flex is unchanged from the default path."""
         super().__init__(embed_dim, num_heads, dropout, bias, qk_norm)
         self.contiguous_cached = contiguous_cached
+        # self.flex_sdpa = torch.compile(flex_attention, dynamic=False)
         self.flex_sdpa = torch.compile(flex_attention)
 
     def forward(
