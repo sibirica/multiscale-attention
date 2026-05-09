@@ -160,9 +160,19 @@ class MultiheadAttention(nn.Module):
 
 class MultiheadFlexAttention(MultiheadAttention):
 
-    def __init__(self, embed_dim, num_heads, dropout=0.0, bias=True, qk_norm=False):
+    def __init__(
+        self,
+        embed_dim,
+        num_heads,
+        dropout=0.0,
+        bias=True,
+        qk_norm=False,
+        *,
+        contiguous_cached: bool = False,
+    ):
+        """If ``contiguous_cached``, contiguous Q/K/V before flex post-cache (multiscale KV rollout); compiled flex is unchanged from the default path."""
         super().__init__(embed_dim, num_heads, dropout, bias, qk_norm)
-        # self.flex_sdpa = torch.compile(flex_attention, dynamic=False)
+        self.contiguous_cached = contiguous_cached
         self.flex_sdpa = torch.compile(flex_attention)
 
     def forward(
@@ -197,7 +207,7 @@ class MultiheadFlexAttention(MultiheadAttention):
             k = self.k_norm(k).to(dtype)
 
         # (bs, n_head, seq_len, head_dim)
-        q = q.transpose(1, 2)
+        q = q.transpose(1, 2).contiguous()  # make torch.compile happy, striding error otherwise
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
@@ -207,6 +217,11 @@ class MultiheadFlexAttention(MultiheadAttention):
         if cache is not None:
             k, v = cache.update(k, v)
             k_len = k.size(2)
+
+        if self.contiguous_cached:
+            q = q.contiguous()
+            k = k.contiguous()
+            v = v.contiguous()
 
         output = self.flex_sdpa(q, k, v, block_mask=block_mask)  # (bs, n_heads, seq_len, head_dim)
 

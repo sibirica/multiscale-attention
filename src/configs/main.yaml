@@ -27,7 +27,7 @@ noise_type: additive # Type of noise (select from [additive, multiplicative])
 
 # For multiscale BCAT autoregressive training, 
 # sometimes repeat the penultimate input frame as the last input frame
-simulated_padding_prob: 0 
+# simulated_padding_prob: 0 
 
 flip: 0 # randomly flip the data in space dimensions
 rotate: 0 # right angle rotations in space dimensions
@@ -65,9 +65,11 @@ denormalize_for_loss: 0 # compute loss in normalized space or original space (1 
 ## evaluate
 
 eval_only: 0 # Only run evaluations
+eval_log_wandb: 0 # If eval_only: set 1 to enable W&B (otherwise eval never calls wandb.init; avoids a stray run)
 rollout: 0 # test model rollout
 eval_size: -1 # Size of test samples (-1 for everything)
 eval_single_file: 0 # Evaluate each file from com_ns separately 
+eval_timing_warmup_batches: 1 # CUDA eval: skip timing for first N dataloader batches (compile/KV/cache warm); 0 disables
 
 print_outputs: 0 # Print/graph all outputs
 save_outputs: 0 # save all outputs

@@ -543,11 +543,11 @@ class Trainer(object):
                         noise = noise * data_mask
                     model_input["data"][:, model_input["input_len"] :] += noise
 
-                simulated_padding_prob = self.params.get("simulated_padding_prob", 0)
-                if simulated_padding_prob > 0 and data_input.size(1) > 1:
-                    simulate_padding = torch.rand((), device=data_input.device) < simulated_padding_prob
-                    if simulate_padding:
-                        model_input["data"][:, input_len - 1] = model_input["data"][:, input_len - 2]
+                # simulated_padding_prob = self.params.get("simulated_padding_prob", 0)
+                # if simulated_padding_prob > 0 and data_input.size(1) > 1:
+                #     simulate_padding = torch.rand((), device=data_input.device) < simulated_padding_prob
+                #     if simulate_padding:
+                #         model_input["data"][:, input_len - 1] = model_input["data"][:, input_len - 2]
 
             else:
                 model_input["data_input"] = data_input

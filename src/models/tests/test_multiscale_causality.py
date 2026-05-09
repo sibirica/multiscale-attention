@@ -114,7 +114,6 @@ def _multiscale_config():
             n_head=N_HEAD,
             norm_first=True,
             qk_norm=False,
-            first_norm="layer",
             norm="layer",
             activation="gelu",
             recombine_activation="gelu",
@@ -123,6 +122,10 @@ def _multiscale_config():
             kv_cache=False,
             rate=RATE,
             shared_scale_ffn=False,
+            limit_window=True,
+            self_window=4,
+            fast_to_slow_window=2,
+            slow_to_fast_window=RATE,
             patch_num=PATCH_NUM,
             patch_num_output=PATCH_NUM,
             embedder=dict(
@@ -289,6 +292,59 @@ def fwd_vs_generate_check(
     return 0 if consistent else 1
 
 
+@torch.no_grad()
+def dense_vs_kv_rollout_generate_check(
+    label: str,
+    disable_slow_scale: bool,
+    atol: float = 5e-3,
+):
+    """Two MultiscaleBCAT instances with identical weights: ``kv_cache=0`` vs ``kv_cache=1``
+    dense autoregressive ``generate``. Outputs should match within SDPA/backend noise."""
+    cfg_base = OmegaConf.create(OmegaConf.to_container(_multiscale_config(), resolve=True))
+    cfg_base.kv_cache = False
+
+    cfg_kv = OmegaConf.create(OmegaConf.to_container(_multiscale_config(), resolve=True))
+    cfg_kv.kv_cache = True
+
+    m_dense = MultiscaleBCAT(cfg_base, X_NUM, DATA_DIM, max_data_len=T_NUM).to(DEVICE)
+    m_kv = MultiscaleBCAT(cfg_kv, X_NUM, DATA_DIM, max_data_len=T_NUM).to(DEVICE)
+    m_kv.load_state_dict(m_dense.state_dict())
+
+    dr = disable_slow_scale
+    _set_disable_slow_scale(m_dense, dr)
+    _set_disable_slow_scale(m_kv, dr)
+
+    data, times = _make_inputs()
+    data_mask = torch.ones(
+        1, 1, 1, 1, data.size(-1), device=data.device, dtype=data.dtype
+    )
+
+    g_dense = m_dense(
+        "generate",
+        data_input=data[:, :INPUT_LEN],
+        times=times,
+        input_len=INPUT_LEN,
+        data_mask=data_mask,
+    )
+    g_kv = m_kv(
+        "generate",
+        data_input=data[:, :INPUT_LEN],
+        times=times,
+        input_len=INPUT_LEN,
+        data_mask=data_mask,
+    )
+
+    max_diff = (g_dense - g_kv).abs().max().item()
+    ok = max_diff <= atol or torch.allclose(g_dense, g_kv, rtol=1e-3, atol=atol)
+    suffix = "(disable_slow_scale=True)" if dr else "(disable_slow_scale=False)"
+    print(f"\n===== dense vs kv rollout generate: {label} {suffix} =====")
+    print(
+        f"  max |dense - kv| = {max_diff:.3e}; atol={atol:.0e}; "
+        f"{'OK' if ok else 'FAIL'}"
+    )
+    return 0 if ok else 1
+
+
 def main():
     torch.manual_seed(0)
 
@@ -333,6 +389,15 @@ def main():
     n_leaks["fwd_gen_ms_full"] = fwd_vs_generate_check(
         "MultiscaleBCAT (disable_slow_scale=False)",
         make_ms_full,
+    )
+
+    n_leaks["dense_kv_ms_disabled"] = dense_vs_kv_rollout_generate_check(
+        "MultiscaleBCAT",
+        disable_slow_scale=True,
+    )
+    n_leaks["dense_kv_ms_full"] = dense_vs_kv_rollout_generate_check(
+        "MultiscaleBCAT",
+        disable_slow_scale=False,
     )
 
     print()

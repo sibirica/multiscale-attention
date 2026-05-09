@@ -91,6 +91,10 @@ def main(params: DictConfig):
     # wandb logging
     if not params.is_master:
         params.use_wandb = False
+    # Standalone eval (eval_only=1) should not open a new W&B run just because
+    # use_wandb defaults to 1 in yaml. Opt in with eval_log_wandb=1.
+    if params.eval_only and not params.get("eval_log_wandb", False):
+        params.use_wandb = False
     if params.use_wandb:
         if not params.wandb.id:
             params.wandb.id = wandb.util.generate_id()
@@ -147,6 +151,9 @@ def main(params: DictConfig):
         max_mem = torch.cuda.max_memory_allocated() / 1024**2
         s_mem = "MEM: {:.2f} MB".format(max_mem)
         logger.info(s_mem)
+
+        if params.use_wandb:
+            wandb.finish()
 
         exit()
 

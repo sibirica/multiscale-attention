@@ -57,7 +57,7 @@ def main() -> None:
     if time_len_fast % temporal_rate != 0:
         raise ValueError("time_len_fast must be divisible by temporal_rate.")
 
-    slow_time = (time_len_fast - 1) // temporal_rate + 1
+    slow_time = max(1, time_len_fast // temporal_rate)
     fast_self = build_self_attn_mask(
         time_len_fast, spatial_tokens, device=torch.device("cpu"), dtype=torch.float32
     )

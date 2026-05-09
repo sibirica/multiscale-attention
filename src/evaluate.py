@@ -129,11 +129,25 @@ class Evaluator(object):
 
         all_results = {}
         more_metrics = []
+        # Inference timing: cuda Events on current stream + end_event.synchronize()
+        # before elapsed_time (CUDA requires both events completed; we avoid
+        # torch.cuda.synchronize(), which drains all streams / device-wide).
+        # First ``eval_timing_warmup_batches`` batches per loader run normally but are not timed;
+        # after the last warmup batch we synchronize once so delayed compile work does not bleed
+        # into the first timed batch.
+        inference_timings: dict[str, dict] = {}
 
         for type, loader in self.dataloaders.items():
             num_plotted = 0
             eval_size = 0
             results = defaultdict(list)
+            inference_ms_total = 0.0
+            inference_samples = 0
+            timing_use_cuda = (not self.params.cpu) and torch.cuda.is_available()
+            timing_warmup = max(0, int(params.eval_timing_warmup_batches))
+            if timing_use_cuda:
+                timing_start_ev = torch.cuda.Event(enable_timing=True)
+                timing_end_ev = torch.cuda.Event(enable_timing=True)
 
             if self.params.debug:
                 logger.info(f"Evaluating {type}")
@@ -161,10 +175,21 @@ class Evaluator(object):
                 else:
                     mode = "generate"
 
+                record_inference_timing = timing_use_cuda and idx >= timing_warmup
+
+                if record_inference_timing:
+                    timing_start_ev.record()
                 with torch.amp.autocast(
                     "cpu" if params.cpu else "cuda", enabled=bool(params.amp), dtype=torch.bfloat16
                 ):
                     data_output = model(mode, **model_input)  # (bs, output_len, x_num, x_num, data_dim)
+                if record_inference_timing:
+                    timing_end_ev.record()
+                    timing_end_ev.synchronize()
+                    inference_ms_total += timing_start_ev.elapsed_time(timing_end_ev)
+                    inference_samples += bs
+                elif timing_use_cuda and timing_warmup > 0 and idx == timing_warmup - 1:
+                    torch.cuda.synchronize()
 
                 # computing eval metrics
 
@@ -307,6 +332,21 @@ class Evaluator(object):
 
             results["size"] = eval_size
             all_results[type] = results
+            if timing_use_cuda:
+                if inference_samples > 0:
+                    inference_timings[type] = {
+                        "mode": mode,
+                        "ms_per_sample": inference_ms_total / inference_samples,
+                        "n_samples": inference_samples,
+                        "warmup_batches": timing_warmup,
+                    }
+                elif timing_warmup > 0:
+                    logger.warning(
+                        "Inference timing skipped all batches for %s "
+                        "(eval_size / loader shorter than eval_timing_warmup_batches=%d); increase eval or lower warmup.",
+                        type,
+                        timing_warmup,
+                    )
 
         if params.multi_gpu:
             # sync results on all gpus
@@ -373,6 +413,22 @@ class Evaluator(object):
                 )
             )
         )
+
+        if inference_timings:
+            timing_rows = [
+                [t, info["mode"], info["warmup_batches"], info["n_samples"], info["ms_per_sample"]]
+                for t, info in inference_timings.items()
+            ]
+            logger.info(
+                "Inference latency (local, post-warmup batches only; not logged to wandb):\n{}".format(
+                    tabulate(
+                        timing_rows,
+                        headers=["type", "mode", "warmup_batches", "n_samples_timed", "ms / sample"],
+                        tablefmt="grid",
+                        floatfmt=["", "", ".0f", ".0f", ".3f"],
+                    )
+                )
+            )
 
         return stats, results_per_type
 

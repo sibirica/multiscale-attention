@@ -25,8 +25,8 @@ logger = getLogger()
 
 
 
-
-def block_lower_triangular_mask(block_size, block_num, use_float=False):
+### NOTE: ability to choose dtype is new
+def block_lower_triangular_mask(block_size, block_num, use_float=False, dtype=None):
     """
     Create a block lower triangular boolean mask. (upper right part will be 1s, and represent locations to ignore.)
     """
@@ -37,7 +37,9 @@ def block_lower_triangular_mask(block_size, block_num, use_float=False):
     final_mask = torch.logical_or(lower_tri_mask, blocks)
 
     if use_float:
-        return torch.zeros_like(final_mask, dtype=torch.float32).masked_fill_(~final_mask, float("-inf"))
+        if dtype is None:
+            dtype = torch.get_default_dtype()
+        return torch.zeros_like(final_mask, dtype=dtype).masked_fill_(~final_mask, float("-inf"))
     else:
         return ~final_mask
 

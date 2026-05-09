@@ -25,25 +25,52 @@ def _show(name: str, mask: torch.Tensor) -> None:
     print()
 
 
-def main():
-    rate = 2
-    fast_time = 8
-    slow_time = (fast_time - 1) // rate + 1
-    spatial_tokens = 1
-    device = torch.device("cpu")
-
-    print(f"rate={rate}, fast_time={fast_time}, slow_time={slow_time}, spatial_tokens={spatial_tokens}")
+def _show_set(rate, fast_time, slow_time, spatial_tokens, device, *,
+              self_window=None, f2s_window=None, s2f_window=None, label=""):
+    print(f"\n##### {label} #####")
+    print(
+        f"rate={rate}, fast_time={fast_time}, slow_time={slow_time}, "
+        f"spatial_tokens={spatial_tokens}, self_window={self_window}, "
+        f"f2s_window={f2s_window}, s2f_window={s2f_window}"
+    )
     print()
-
-    fast_self = build_self_attn_mask(fast_time, spatial_tokens, device, dtype=torch.float32)
-    slow_self = build_self_attn_mask(slow_time, spatial_tokens, device, dtype=torch.float32)
-    f2s = build_fast_to_slow_mask(fast_time, slow_time, rate, spatial_tokens, device, dtype=torch.float32)
-    s2f = build_slow_to_fast_mask(fast_time, slow_time, rate, spatial_tokens, device, dtype=torch.float32)
-
+    fast_self = build_self_attn_mask(
+        fast_time, spatial_tokens, device, dtype=torch.float32, window=self_window
+    )
+    slow_self = build_self_attn_mask(
+        slow_time, spatial_tokens, device, dtype=torch.float32, window=self_window
+    )
+    f2s = build_fast_to_slow_mask(
+        fast_time, slow_time, rate, spatial_tokens, device,
+        dtype=torch.float32, window=f2s_window,
+    )
+    s2f = build_slow_to_fast_mask(
+        fast_time, slow_time, rate, spatial_tokens, device,
+        dtype=torch.float32, window=s2f_window,
+    )
     _show("fast_self_attn_mask  (rows=fast queries, cols=fast keys)", fast_self)
     _show("slow_self_attn_mask  (rows=slow queries, cols=slow keys)", slow_self)
     _show("fast_to_slow_mask    (rows=fast queries, cols=slow keys)", f2s)
     _show("slow_to_fast_mask    (rows=slow queries, cols=fast keys)", s2f)
+    return s2f
+
+
+def main():
+    rate = 2
+    fast_time = 8
+    slow_time = max(1, fast_time // rate)
+    spatial_tokens = 1
+    device = torch.device("cpu")
+
+    s2f = _show_set(
+        rate, fast_time, slow_time, spatial_tokens, device,
+        label="no window (limit_window=False)",
+    )
+    _show_set(
+        rate, fast_time, slow_time, spatial_tokens, device,
+        self_window=3, f2s_window=2, s2f_window=rate,
+        label="windowed (self=3, f2s=2, s2f=rate)",
+    )
 
     # Quantify the leak: how many *future* fast keys can each slow query attend to?
     s2f_allowed = (s2f == 0)
