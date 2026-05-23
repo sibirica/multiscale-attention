@@ -6,39 +6,29 @@ The code is based on the repository [PROSE](https://github.com/felix-lyx/prose).
 
 ## Install dependencies
 
-```
-conda create -n bcat python=3.11
-conda activate bcat
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+```bash
+conda create -n bcat python=3.11 && conda activate bcat
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126 # or other compatible versions
 pip install -e .[dev]
 ```
 
 ## Run the model
 
-To launch a model training with modified arguments (arg1,val1), (arg2,val2):
+Scripts for reproducing the results in the paper are in `scripts/repo_archive.sh` folder. All default arguments can be found in the ```src/configs``` folder, and are managed using [Hydra](https://hydra.cc/). Distributed training is available via PyTorch Distributed Data Parallel (DDP).
 
+Example full training script on 4 GPUs and all datasets:
+```bash
+torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py exp_id=bcat_baseline batch_size=32 data=fluids_sample compile=1 model.flex_attn=1
 ```
-python src/main.py arg1=val1 arg2=val2
+
+Example full inference script on 4 GPUs and all datasets:
+```bash
+torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py eval_only=1 use_wandb=0 exp_name=eval eval_from_exp=checkpoint/bcat_test/bcat_baseline log_eval_plots=-1 exp_id=bcat_baseline batch_size_eval=64 model.flex_attn=1
 ```
-
-All default arguments can be found in the ```src/configs``` folder, and are managed using [Hydra](https://hydra.cc/).
-
-Scripts for reproducing the results in the paper are located in `src/scripts` folder. 
 
 ## Data
 
 The dataset we used are collected from [PDEBench](https://github.com/pdebench/PDEBench), [PDEArena](https://github.com/pdearena/pdearena), and [CFDBench](https://github.com/luo-yining/CFDBench). More details about data preprocessing are included in ```src/data_utils/README.md```.
-
-
-## Distributed training
-
-Distributed training is available via PyTorch Distributed Data Parallel (DDP)
-
-To launch a run on 1 node with 4 GPU, use 
-
-```
-torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py
-```
 
 ## Citation
 
