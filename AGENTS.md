@@ -38,12 +38,20 @@ Previous training scripts can be found in `scripts/repo_archive.sh` and `scripts
 
 ## Coding Style & Naming Conventions
 
+Follow these rules for all code changes in this repository:
+
 - Python 3.11, 4-space indentation, `snake_case` for functions/variables, `CamelCase` for classes, lower_snake for modules and config files.
 - Format and lint with **ruff** (`line-length = 120`, config in `pyproject.toml`):
   ```bash
   ruff format . && ruff check .
   ```
 - Keep new modules under the matching `src/<area>/` subpackage; add a Hydra config in the corresponding `configs/<group>/` folder when introducing new datasets, models, or optimizers.
+- Minimize comments; be concise; code should be self-explanatory and self-documenting.
+- Don't make trivial (1-2 LOC) helper functions that are only used once unless
+  it significantly improves code readability.
+- Match existing code style and architectural patterns.
+
+If uncertain, choose the simpler, more concise implementation.
 
 ## Testing Guidelines
 
