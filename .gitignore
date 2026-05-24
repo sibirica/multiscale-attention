@@ -162,44 +162,15 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-
-# ------------------------------------------------------------------------------------------------
-# The following are not from the original lightning-hydra-template template, but added by icon-core.
-
-# VSCode
-.vscode/
-
-# Cursor
-.cursor/*
-!.cursor/rules/
-
-# for macOS
-**/.DS_Store
-
-# put your scratch here
-/scratch
-
-# put your data here (if you don't have a better place)
-/data
-
-# put your job logs here (if you don't have a better place)
-/logs
-
-# put important analysis results here (if you don't have a better place)
-/analysis
-
-# See README.md for more details
-**/train_custom.yaml
-
-# for job logs on clusters
-**/*.o*
-*.slurm
-
-
 # ------------------------------------------------------------------------------------------------
 # The following are for project-specific configs
 
+# model checkpoints and logs
 checkpoint/
+
+# wandb logs
 wandb/
-.vscode/
 artifacts/
+
+# VSCode
+.vscode/
