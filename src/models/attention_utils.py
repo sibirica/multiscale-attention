@@ -110,8 +110,8 @@ class MultiheadAttention(nn.Module):
         # (bs, n_head, seq_len, head_dim)
         # q = q.transpose(1, 2)
         q = q.transpose(1, 2).contiguous()  # make torch.compile happy, striding error otherwise
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
+        k = k.transpose(1, 2)#.contiguous()
+        v = v.transpose(1, 2)#.contiguous()
 
         if rotary_emb is not None:
             q, k = rotary_emb.rotate_queries_with_cached_keys(q, k)
@@ -157,7 +157,6 @@ class MultiheadAttention(nn.Module):
         output = output.transpose(1, 2).contiguous().view(bs, seq_len, -1)
         return self.out_proj(output)
 
-# NOTE: contiguous_cached used for multiscale kv cache
 class MultiheadFlexAttention(MultiheadAttention):
 
     def __init__(
@@ -167,11 +166,8 @@ class MultiheadFlexAttention(MultiheadAttention):
         dropout=0.0,
         bias=True,
         qk_norm=False,
-        *,
-        contiguous_cached: bool = False,
     ):
         super().__init__(embed_dim, num_heads, dropout, bias, qk_norm)
-        self.contiguous_cached = contiguous_cached
         # self.flex_sdpa = torch.compile(flex_attention, dynamic=False)
         self.flex_sdpa = torch.compile(flex_attention)
 
@@ -208,8 +204,8 @@ class MultiheadFlexAttention(MultiheadAttention):
 
         # (bs, n_head, seq_len, head_dim)
         q = q.transpose(1, 2).contiguous()  # make torch.compile happy, striding error otherwise
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
+        k = k.transpose(1, 2)#.contiguous()
+        v = v.transpose(1, 2)#.contiguous()
 
         if rotary_emb is not None:
             q, k = rotary_emb.rotate_queries_with_cached_keys(q, k)
@@ -217,11 +213,6 @@ class MultiheadFlexAttention(MultiheadAttention):
         if cache is not None:
             k, v = cache.update(k, v)
             k_len = k.size(2)
-
-        if self.contiguous_cached:
-            q = q.contiguous()
-            k = k.contiguous()
-            v = v.contiguous()
 
         output = self.flex_sdpa(q, k, v, block_mask=block_mask)  # (bs, n_heads, seq_len, head_dim)
 

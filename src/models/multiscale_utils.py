@@ -254,7 +254,6 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         bias: bool = True,
         qk_norm: bool = False,
         flex_attn: bool = False,
-        flex_contiguous_cached: bool = False,
         shared_scale_ffn: bool = False,
         disable_slow_scale: bool = False, ### FLAG FOR DEBUGGING W/O SLOW SCALE
         norm: type[nn.Module] = nn.LayerNorm,
@@ -272,18 +271,15 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         if flex_attn:
             SelfMHA = MultiheadFlexAttention
             CrossMHA = MultiheadFlexAttention
-            flex_kw = {"contiguous_cached": flex_contiguous_cached}
         else:
             SelfMHA = MultiheadAttention
             CrossMHA = MultiheadAttention
-            flex_kw = {}
         self.self_attn_fast = SelfMHA(
             fast_embed_dim,
             num_heads=num_heads,
             dropout=dropout,
             bias=bias,
             qk_norm=qk_norm,
-            **flex_kw,
         )
         self.self_attn_slow = SelfMHA(
             slow_embed_dim,
@@ -291,7 +287,6 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
             dropout=dropout,
             bias=bias,
             qk_norm=qk_norm,
-            **flex_kw,
         )
         if self.disable_slow_scale: # no bias from slow scale either
             self.cross_attn_fast = CrossMHA(
@@ -300,7 +295,6 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
                 dropout=dropout,
                 bias=False,
                 qk_norm=qk_norm,
-                **flex_kw,
             )
         else:
             self.cross_attn_fast = CrossMHA(
@@ -309,7 +303,6 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
                 dropout=dropout,
                 bias=bias,
                 qk_norm=qk_norm,
-                **flex_kw,
             )
         self.cross_attn_slow = CrossMHA(
             slow_embed_dim,
@@ -317,7 +310,6 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
             dropout=dropout,
             bias=bias,
             qk_norm=qk_norm,
-            **flex_kw,
         )
 
         self.norm_fast_attn = norm(fast_embed_dim)
@@ -977,7 +969,7 @@ class TwoScaleTransformerEncoder(nn.Module):
             )
 
         # Tail is the last spatial block of the fast stream (last predicted frame's patches).
-        out_fast = fast_stream[:, -spatial_tokens:, :]  # [B, spatial_tokens, D_fast]
+        out_fast = fast_stream[:, -spatial_tokens:, :].contiguous()  # [B, spatial_tokens, D_fast]
         match self.decoder:
             case FastOnlyRecombineDecoder():
                 return self.decoder(out_fast)

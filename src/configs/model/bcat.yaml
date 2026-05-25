@@ -14,7 +14,7 @@ norm: rms # select from [layer, rms]
 activation: swiglu
 rotary: 0
 
-flex_attn: 0
+flex_attn: 1
 kv_cache: 1
 
 patch_num: 8 #16 # for input, number of patches per dimension
@@ -28,7 +28,7 @@ embedder:
     patch_num_output: ${..patch_num_output}
 
     time_embed: learnable # select from continuous and learnable
-    max_time_len: 50 # 20
+    max_time_len: 50 # 50 # 20
 
     conv_dim: 32
     early_conv: 0

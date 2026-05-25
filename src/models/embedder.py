@@ -202,6 +202,7 @@ class ConvEmbedder(nn.Module):
 
         if config.get("deep", 0):
             self.post_proj = nn.Sequential(
+                # nn.Identity(),  # temporary checkpoint compatibility for bcat_baseline_4?
                 nn.Linear(in_features=self.dim, out_features=self.dim),
                 act(),
                 nn.Linear(in_features=self.dim, out_features=self.dim),
@@ -221,6 +222,7 @@ class ConvEmbedder(nn.Module):
             )
         else:
             self.post_proj = nn.Sequential(
+                # nn.Identity(), # temporary checkpoint compatibility for bcat_baseline_4 etc.
                 Rearrange("b (t h w) d -> (b t) d h w", h=self.config.patch_num_output, w=self.config.patch_num_output),
                 nn.ConvTranspose2d(
                     in_channels=self.dim,

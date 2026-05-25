@@ -420,7 +420,7 @@ class Evaluator(object):
                 for t, info in inference_timings.items()
             ]
             logger.info(
-                "Inference latency (local, post-warmup batches only; not logged to wandb):\n{}".format(
+                "Inference latency (post-warmup batches only):\n{}".format(
                     tabulate(
                         timing_rows,
                         headers=["type", "mode", "warmup_batches", "n_samples_timed", "ms / sample"],

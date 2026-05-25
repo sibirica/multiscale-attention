@@ -1,5 +1,6 @@
 """
 KVCache: Adapted from https://github.com/pytorch/torchtune/blob/main/torchtune/modules/kv_cache.py
+Update: 5/9/26 - Gemini modification using regular slicing for Dynamo's sake
 """
 
 from typing import Tuple
@@ -25,17 +26,18 @@ class KVCache:
         num_kv_heads: int,
         head_dim: int,
     ) -> None:
-        # super().__init__()
         cache_shape = (batch_size, num_kv_heads, max_seq_len, head_dim)
         self.cache_shape = cache_shape
         self.k_cache = [None for _ in range(n_layers)]
         self.v_cache = [None for _ in range(n_layers)]
-        self.cache_pos = [torch.arange(0, max_seq_len) for _ in range(n_layers)]
+        # Use a simple list of ints to track the position in each layer
+        self.cache_pos = [0 for _ in range(n_layers)]
         self.layer = 0
 
     @property
     def size(self) -> int:
-        return self.cache_pos[self.layer][0].item()
+        # Directly return the integer position
+        return self.cache_pos[self.layer]
 
     def set_layer(self, layer: int):
         self.layer = layer
@@ -49,11 +51,9 @@ class KVCache:
 
     def reset(self):
         self.layer = 0
-        size = self.size
-        for i, pos in enumerate(self.cache_pos):
-            pos -= size
-            # self.k_cache[i].zero_() # seems unnecessary
-            # self.v_cache[i].zero_()
+        # Reset all integer positions to 0
+        for i in range(len(self.cache_pos)):
+            self.cache_pos[i] = 0
 
     def update(self, k_val: torch.Tensor, v_val: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Update KV cache with the new ``k_val``, ``v_val`` and return the updated cache.
@@ -98,20 +98,17 @@ class KVCache:
                 f", but found new key tensors with batch size {k_val.shape[0]}!"
             )
 
-        assert (self.cache_pos[l][0] + seq_len) <= k_cache.shape[2]
+        curr_pos = self.cache_pos[l]
+        assert (curr_pos + seq_len) <= k_cache.shape[2]
 
-        k_cache[:bsz, :, self.cache_pos[l][:seq_len]] = k_val
-        v_cache[:bsz, :, self.cache_pos[l][:seq_len]] = v_val
+        # Use standard Python slicing instead of advanced tensor indexing
+        k_cache[:bsz, :, curr_pos : curr_pos + seq_len] = k_val
+        v_cache[:bsz, :, curr_pos : curr_pos + seq_len] = v_val
 
-        # forward cache_pos seq_len positions along
-        # cache_pos starts at (0, 1, 2, 3, 4, 5, ...)
-        # an update of seq_len = 5 tokens brings it to
-        # (5, 6, 7, 8, 9, ...)
-        # this allows us to track the current position in the cache
-        # after the last update in a compile-friendly way without any dynamism
-        # e.g. relying on an int size tracker, or re-creating cache_pos every time
+        # Increment the integer tracker
         self.cache_pos[l] += seq_len
 
+        # Slice out the valid cache to return
         k_out = k_cache[:bsz, :, : self.size]
         v_out = v_cache[:bsz, :, : self.size]
 

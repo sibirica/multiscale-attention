@@ -2,12 +2,10 @@ name: multiscale_bcat_auto
 
 # shared attributes
 n_layer: 6 # 12
-dim_emb: 1024 # 512 # fast embedding dimension
+dim_emb: 640 # 1024 # fast embedding dimension
 slow_dim: ${.dim_emb}
-dim_ffn: 2752 # 1376
-pool_dim: 2752 # hidden layer size of slow layer encoding ffn
-lift_dim: 2752 # hidden layer size of lifting from slow to fast
-recombine_dim: 2752 # 4800 # 1408 # hidden layer size of recombined layer decoding ffn
+dim_ffn: 1664 # 2752
+pool_dim: ${.dim_ffn} # hidden layer size of slow layer encoding ffn
 dropout: 0
 attn_dropout: 0
 n_head: 8
@@ -21,14 +19,15 @@ rotary: 0
 
 flex_attn: 1
 kv_cache: 1
-rate: 5 # 2
+rate: 10 # 2
 shared_scale_ffn: 0 # if 1, fast/slow streams in each layer use the same FFN weights
 
 # Optional sliding-window restriction on the attention masks.
 # When limit_window=False, the windows are ignored and attention is pure block-causal.
 # Window sizes are counted in time-block units (including the current step for self-attention).
 limit_window: true
-self_window: 4            # max context in fast/slow self-attention
+attn_sink_tokens: 1       # number of always-visible key tokens reserved as attention sink
+self_window: 4            # max context in fast/slow self-attention - should it just be rate?
 fast_to_slow_window: 2    # max context for fast queries reading slow keys
 slow_to_fast_window: ${.rate}  # max context for slow queries reading fast keys
 
@@ -47,7 +46,7 @@ embedder:
     patch_num_output: ${..patch_num_output}
 
     time_embed: learnable # select from continuous and learnable
-    max_time_len: 50 # (switched with length of dataset, previously 20)
+    max_time_len: 50 # 100 # (switched with length of dataset, previously 20)
 
     conv_dim: 32
     early_conv: 0

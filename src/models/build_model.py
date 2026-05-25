@@ -29,7 +29,8 @@ def build_model(params, model_config, data_config, symbol_env):
 
         case "multiscale_bcat_auto":
             modules["model"] = MultiscaleBCAT(
-                model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
+                model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num,
+                params.eval_only # make sure not to waste time compiling fwd if unused
             )
 
         case "bcat_next_token_auto":

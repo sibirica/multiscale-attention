@@ -47,7 +47,12 @@ _bcat_mod.sdpa_kernel = _no_op_sdpa_kernel
 _ms_mod.sdpa_kernel = _no_op_sdpa_kernel
 
 from models.bcat import BCAT
-from models.multiscale_bcat import MultiscaleBCAT
+from models.multiscale_bcat import (
+    MultiscaleBCAT,
+    build_fast_to_slow_mask,
+    build_self_attn_mask,
+    build_slow_to_fast_mask,
+)
 
 
 # Small but non-trivial sizes; rate=2 matches the production setup. patch_num=2
@@ -345,6 +350,52 @@ def dense_vs_kv_rollout_generate_check(
     return 0 if ok else 1
 
 
+def attention_sink_mask_check() -> int:
+    """Verify that enabling sink tokens makes early key columns globally visible."""
+    device = torch.device("cpu")
+    dtype = torch.float32
+    fast_time = 6
+    slow_time = max(1, fast_time // RATE)
+    spatial_tokens = PATCH_NUM * PATCH_NUM
+    sink_tokens = 1
+
+    f_self_base = build_self_attn_mask(
+        fast_time, spatial_tokens, device=device, dtype=dtype, window=2, sink_tokens=0
+    )
+    f_self_sink = build_self_attn_mask(
+        fast_time, spatial_tokens, device=device, dtype=dtype, window=2, sink_tokens=sink_tokens
+    )
+    f2s_base = build_fast_to_slow_mask(
+        fast_time, slow_time, RATE, spatial_tokens, device=device, dtype=dtype, window=1, sink_tokens=0
+    )
+    f2s_sink = build_fast_to_slow_mask(
+        fast_time, slow_time, RATE, spatial_tokens, device=device, dtype=dtype, window=1, sink_tokens=sink_tokens
+    )
+    s2f_base = build_slow_to_fast_mask(
+        fast_time, slow_time, RATE, spatial_tokens, device=device, dtype=dtype, window=1, sink_tokens=0
+    )
+    s2f_sink = build_slow_to_fast_mask(
+        fast_time, slow_time, RATE, spatial_tokens, device=device, dtype=dtype, window=1, sink_tokens=sink_tokens
+    )
+
+    # Dense masks use 0 for allowed edges and -inf for disallowed edges.
+    f_self_col0 = torch.isfinite(f_self_sink[:, 0]).all().item()
+    f2s_col0 = torch.isfinite(f2s_sink[:, 0]).all().item()
+    s2f_col0 = torch.isfinite(s2f_sink[:, 0]).all().item()
+
+    # Confirm sink option increases connectivity for at least one query row.
+    f_self_diff = torch.isfinite(f_self_sink[:, 0]).sum() > torch.isfinite(f_self_base[:, 0]).sum()
+    f2s_diff = torch.isfinite(f2s_sink[:, 0]).sum() > torch.isfinite(f2s_base[:, 0]).sum()
+    s2f_diff = torch.isfinite(s2f_sink[:, 0]).sum() > torch.isfinite(s2f_base[:, 0]).sum()
+
+    ok = bool(f_self_col0 and f2s_col0 and s2f_col0 and f_self_diff and f2s_diff and s2f_diff)
+    print("\n===== multiscale attention sink mask check =====")
+    print(f"  sink column fully visible (self/f2s/s2f): {f_self_col0}/{f2s_col0}/{s2f_col0}")
+    print(f"  sink increases connectivity (self/f2s/s2f): {bool(f_self_diff)}/{bool(f2s_diff)}/{bool(s2f_diff)}")
+    print(f"  {'OK' if ok else 'FAIL'}")
+    return 0 if ok else 1
+
+
 def main():
     torch.manual_seed(0)
 
@@ -399,6 +450,7 @@ def main():
         "MultiscaleBCAT",
         disable_slow_scale=False,
     )
+    n_leaks["attn_sink_masks"] = attention_sink_mask_check()
 
     print()
     print("=" * 60)
