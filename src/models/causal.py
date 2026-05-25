@@ -13,7 +13,6 @@ from .attention_utils import (
 )
 from .embedder import get_embedder
 from logging import getLogger
-from functools import partial
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.attention.flex_attention import create_block_mask
 from .kv_cache import KVCache

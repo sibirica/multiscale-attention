@@ -100,12 +100,7 @@ class MultiheadAttention(nn.Module):
             q = self.q_norm(q)
             k = self.k_norm(k)
 
-        # if rotary_emb is not None:
-        #     q = rotary_emb(q)
-        #     k = rotary_emb(k)
-
         # (bs, n_head, seq_len, head_dim)
-        # q = q.transpose(1, 2)
         q = q.transpose(1, 2).contiguous()  # make torch.compile happy, striding error otherwise
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
@@ -361,7 +356,6 @@ class CustomTransformerEncoder(nn.Module):
 
         if config is not None and config.rotary:
             self.rotary_emb = RotaryEmbedding(dim=config.dim_emb // config.n_head // 2)
-            # self.rotary_emb = RotaryPositionalEmbeddings(dim=config.dim_emb // config.n_head, max_seq_len=5120)
             self.rotary = True
         else:
             self.rotary_emb = None
@@ -552,7 +546,6 @@ class CustomTransformerDecoder(nn.Module):
 
         if config is not None and config.rotary:
             self.rotary_emb = RotaryEmbedding(dim=config.dim_emb // config.n_head // 2)
-            # self.rotary_emb = RotaryPositionalEmbeddings(dim=config.dim_emb // config.n_head, max_seq_len=5120)
             self.rotary = True
         else:
             self.rotary_emb = None
