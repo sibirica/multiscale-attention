@@ -1,16 +1,8 @@
 from logging import getLogger
 import torch
-from tabulate import tabulate
 from ema_pytorch import EMA
+# from tabulate import tabulate
 
-from .bcat import BCAT, BCAT_Reg
-from .causal import BCAT_causal
-from .baselines import FNO, UNet, ViT, DeepONet
-from .space_time import ST_auto
-from .vq_bcat import VQBCAT
-from .vq.vqvae import VQModelWrapper
-from .diffusion import I2IDiffusion
-from .prose import PROSE_2to1, PROSE_1to1
 
 logger = getLogger()
 
@@ -23,16 +15,22 @@ def build_model(params, model_config, data_config, symbol_env):
 
     match name:
         case "st_auto":
+            from .space_time import ST_auto
+
             modules["model"] = ST_auto(
                 model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
             )
 
         case "vq_bcat_auto":
+            from .vq_bcat import VQBCAT
+
             modules["model"] = VQBCAT(
                 model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
             )
 
         case "vqvae":
+            from .vq.vqvae import VQModelWrapper
+
             config = model_config.embedder
             modules["model"] = VQModelWrapper(
                 n_embed=config.codebook_size,
@@ -44,39 +42,59 @@ def build_model(params, model_config, data_config, symbol_env):
             )
 
         case "bcat_reg_auto":
+            from .bcat import BCAT_Reg
+
             modules["model"] = BCAT_Reg(
                 model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
             )
 
         case "bcat_auto":
+            from .bcat import BCAT
+
             modules["model"] = BCAT(
                 model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
             )
 
         case "bcat_next_token_auto":
+            from .causal import BCAT_causal
+
             modules["model"] = BCAT_causal(
                 model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
             )
 
         case "diffusion2d":
+            from .diffusion import I2IDiffusion
+
             modules["model"] = I2IDiffusion(model_config, data_config.x_num, data_config.max_output_dimension)
 
         case "fno":
+            from .baselines import FNO
+
             modules["model"] = FNO(model_config, data_config.max_output_dimension)
 
         case "vit":
+            from .baselines import ViT
+
             modules["model"] = ViT(model_config, data_config.x_num, data_config.max_output_dimension)
 
         case "unet":
+            from .baselines import UNet
+
             modules["model"] = UNet(model_config, data_config.max_output_dimension)
 
         case "deeponet":
+            from .baselines import DeepONet
+
             modules["model"] = DeepONet(model_config, data_config, params.input_len)
 
         case "prose_2to1":
+            from .prose import PROSE_2to1
+
             modules["model"] = PROSE_2to1(model_config, symbol_env, data_config.x_num, data_config.max_output_dimension)
 
         case "prose_1to1":
+            from .prose import PROSE_1to1
+
             modules["model"] = PROSE_1to1(model_config, data_config.x_num, data_config.max_output_dimension)
 
         case _:
