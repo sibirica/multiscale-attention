@@ -1,4 +1,3 @@
-import os
 import numpy as np
 from logging import getLogger
 from collections import defaultdict
@@ -8,7 +7,7 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
 from dataset import get_dataset
-from utils.misc import sync_tensor, to_cuda, set_worker_sharing_strategy
+from utils.misc import sync_tensor, set_worker_sharing_strategy
 from utils.metrics import compute_metrics
 from utils.plot import plot_2d_pde, plot_2d_pde_formal
 from data_utils.collate import custom_collate
@@ -58,12 +57,6 @@ class Evaluator(object):
         self.symbol_env = symbol_env
         self.datasets: dict = get_dataset(self.params, symbol_env, split="test" if self.params.eval_only else "val")
 
-        self.collate_fn = custom_collate(
-            self.params.data.max_output_dimension,
-            self.symbol_env.pad_index,
-            self.params.data.tie_fields,
-            pad_right=self.params.symbol.pad_right,
-        )
         self.dataloaders = {
             k: DataLoader(
                 v,
@@ -107,16 +100,16 @@ class Evaluator(object):
         model.eval()
 
         if params.print_outputs:
-            save_folder = os.path.join(params.eval_dump_path, "figures/")
-            os.makedirs(save_folder, exist_ok=True)
+            save_folder = params.dump_path / "eval/figures"
+            save_folder.mkdir(parents=True, exist_ok=True)
 
         if params.log_eval_plots > 0:
-            plot_folder = os.path.join(params.eval_dump_path, f"epoch_{self.trainer.epoch}_{self.params.local_rank}")
-            os.makedirs(plot_folder, exist_ok=True)
+            plot_folder = params.dump_path / f"eval/epoch_{self.trainer.epoch}_{self.params.local_rank}"
+            plot_folder.mkdir(parents=True, exist_ok=True)
 
         if params.save_outputs:
-            output_folder = os.path.join(params.eval_dump_path, "outputs/")
-            os.makedirs(output_folder, exist_ok=True)
+            output_folder = params.dump_path / "eval/outputs"
+            output_folder.mkdir(parents=True, exist_ok=True)
 
         if params.eval_only or self.trainer.epoch == params.max_epoch - 1:
             # plot everything during testing and last epoch
@@ -132,9 +125,6 @@ class Evaluator(object):
             num_plotted = 0
             eval_size = 0
             results = defaultdict(list)
-
-            if self.params.debug:
-                logger.info(f"Evaluating {type}")
 
             for idx, samples in enumerate(loader):
                 bs = len(samples["data"])
@@ -213,7 +203,7 @@ class Evaluator(object):
                     output = data_output[..., : params.data[type.split(":")[0]].dim].float().numpy(force=True)
                     target = samples["data"][..., : params.data[type.split(":")[0]].dim].numpy(force=True)
                     errors = np.array(cur_result["_l2_error"])
-                    np.savez(os.path.join(output_folder, f"{type}.npz"), output=output, target=target, errors=errors)
+                    np.savez(str(output_folder / f"{type}.npz"), output=output, target=target, errors=errors)
 
                 if params.print_outputs:
                     # plot all outputs
@@ -240,7 +230,7 @@ class Evaluator(object):
                             params.input_len,
                             plot_title,
                             filename=f"{type}_plot_{index}",
-                            folder=save_folder,
+                            folder=str(save_folder),
                             dim=params.data[type.split(":")[0]].dim,
                         )
 
@@ -272,7 +262,7 @@ class Evaluator(object):
                         params.input_len,
                         plot_title,
                         filename=f"{type}_plot_{index}",
-                        folder=plot_folder,
+                        folder=str(plot_folder),
                         input_plot_len=input_plot_len,
                         output_plot_len=output_plot_len,
                         dim=params.data[type.split(":")[0]].dim,

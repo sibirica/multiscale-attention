@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 import numpy as np
 from matplotlib import pyplot as plt
 
@@ -72,7 +72,7 @@ def plot_2d_pde(
     plt.suptitle(plot_title, fontsize=20)
     plt.tight_layout()
 
-    path = os.path.join(folder, filename + ".png")
+    path = str(Path(folder) / f"{filename}.png")
     plt.savefig(path)
     plt.close(fig)
     return path
@@ -148,7 +148,7 @@ def plot_ax_formal(ax, array, title=None, fontsize=15, cmap="RdBu_r", sym=False)
 #     plt.suptitle(plot_title, fontsize=20)
 #     plt.tight_layout()
 
-#     path = os.path.join(folder, filename + ".png")
+#     path = str(Path(folder) / f"{filename}.png")
 #     plt.savefig(path)
 #     plt.close(fig)
 #     return path
@@ -201,7 +201,7 @@ def plot_2d_pde_formal(
     plt.suptitle(plot_title + "\n\n", fontsize=20)
     plt.tight_layout()
 
-    path = os.path.join(folder, filename + ".png")
+    path = str(Path(folder) / f"{filename}.png")
     plt.savefig(path)
     plt.close(fig)
     return path

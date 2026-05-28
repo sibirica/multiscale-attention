@@ -1,6 +1,6 @@
 # BCAT: A Block Causal Transformer for PDE Foundation Models for Fluid Dynamics
 
-This repository contains code for the paper [BCAT: A Block Causal Transformer for PDE Foundation Models for Fluid Dynamics](https://www.arxiv.org/abs/2501.18972).
+This repository contains code for the paper [BCAT: A Block Causal Transformer for PDE Foundation Models for Fluid Dynamics](https://www.arxiv.org/abs/2501.18972). Pretrained weights are available at: https://huggingface.co/felix-lyx/bcat.
 
 The code is based on the repository [PROSE](https://github.com/felix-lyx/prose).
 
@@ -14,16 +14,32 @@ pip install -e .[dev]
 
 ## Run the model
 
-Scripts for reproducing the results in the paper are in `scripts/repo_archive.sh` folder. All default arguments can be found in the ```src/configs``` folder, and are managed using [Hydra](https://hydra.cc/). Distributed training is available via PyTorch Distributed Data Parallel (DDP).
+Scripts for reproducing the results in the paper are in `scripts/archive/paper_repro.sh`. All default arguments can be found in the `configs` folder, and are managed using [Hydra](https://hydra.cc/). Distributed training is available via PyTorch Distributed Data Parallel (DDP).
 
 Example full training script on 4 GPUs and all datasets:
 ```bash
-torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py exp_id=bcat_baseline batch_size=32 data=fluids_sample compile=1 model.flex_attn=1
+train_args=(
+    exp_id=bcat_baseline
+    data=fluids_sample
+    compile=1
+    model.flex_attn=1
+)
+torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py "${train_args[@]}"
 ```
 
-Example full inference script on 4 GPUs and all datasets:
+Example full inference script on 4 GPUs and all datasets (after training):
 ```bash
-torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py eval_only=1 use_wandb=0 exp_name=eval eval_from_exp=checkpoint/bcat_test/bcat_baseline log_eval_plots=-1 exp_id=bcat_baseline batch_size_eval=64 model.flex_attn=1
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=bcat_baseline
+    reload_model=checkpoint/bcat_test/bcat_baseline
+    batch_size_eval=64
+    model.flex_attn=1
+)
+torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py "${test_args[@]}"
 ```
 
 ## Data

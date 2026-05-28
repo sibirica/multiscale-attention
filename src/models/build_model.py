@@ -131,23 +131,24 @@ def build_model(params, model_config, data_config, symbol_env):
         del modules["model_ema"]
 
     # log
-    for k, v in modules.items():
-        if k.endswith("_ema"):
-            continue
-        logger.info(f"{k}: {v}")
+    if params.is_master:
+        for k, v in modules.items():
+            if k.endswith("_ema"):
+                continue
+            logger.info(f"{k}: {v}")
 
-    for k, v in modules.items():
-        s = f"Number of parameters ({k}): {sum([p.numel() for p in v.parameters() if p.requires_grad]):,}"
-        if hasattr(v, "summary"):
-            # for individual components of a wrapper model
-            s += v.summary()
-        logger.info(s)
+        for k, v in modules.items():
+            s = f"Number of parameters ({k}): {sum([p.numel() for p in v.parameters() if p.requires_grad]):,}"
+            if hasattr(v, "summary"):
+                # for individual components of a wrapper model
+                s += v.summary()
+            logger.info(s)
 
-    # for k, v in modules.items():
-    #     table_data = [(name, str(param.shape), param.requires_grad) for name, param in v.named_parameters()]
-    #     logger.info("\n" + tabulate(table_data, headers=["Parameter Name", "Shape", "Requires Grad"], tablefmt="grid"))
-    #     table_data = [(name, str(param.shape)) for name, param in v.named_parameters() if param.requires_grad]
-    #     logger.info("\n" + tabulate(table_data, headers=["Trainable Parameters", "Shape"], tablefmt="grid"))
+        # for k, v in modules.items():
+        #     table_data = [(name, str(param.shape), param.requires_grad) for name, param in v.named_parameters()]
+        #     logger.info("\n" + tabulate(table_data, headers=["Parameter Name", "Shape", "Requires Grad"], tablefmt="grid"))
+        #     table_data = [(name, str(param.shape)) for name, param in v.named_parameters() if param.requires_grad]
+        #     logger.info("\n" + tabulate(table_data, headers=["Trainable Parameters", "Shape"], tablefmt="grid"))
 
     # cuda
     if not params.cpu:

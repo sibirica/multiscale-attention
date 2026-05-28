@@ -20,7 +20,8 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from models.kv_cache import KVCache
 
-N_MAX_POSITIONS = 1024  # maximum input sequence length
+N_MAX_POSITIONS = 4096  # maximum input sequence length
+flex_attn_compiled = torch.compile(flex_attention)
 
 """
 --------------- Attention Variants ---------------
@@ -161,8 +162,6 @@ class MultiheadFlexAttention(MultiheadAttention):
         logit_softcap: int = 0,
     ):
         super().__init__(embed_dim, num_heads, dropout, bias, qk_norm)
-        # self.flex_sdpa = torch.compile(flex_attention, dynamic=False)
-        self.flex_sdpa = torch.compile(flex_attention)
 
         if logit_softcap > 0:
             from .softcapping import generate_tanh_softcap
@@ -213,7 +212,7 @@ class MultiheadFlexAttention(MultiheadAttention):
             k, v = cache.update(k, v)
             k_len = k.size(2)
 
-        output = self.flex_sdpa(
+        output = flex_attn_compiled(
             q, k, v, block_mask=block_mask, score_mod=self.score_mod
         )  # (bs, n_heads, seq_len, head_dim)
 

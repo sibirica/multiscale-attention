@@ -26,20 +26,34 @@ pip install -e .[dev]
 ```
 
 Example full training script on 4 GPUs and all datasets:
-
 ```bash
-torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py exp_id=bcat_baseline batch_size=32 data=fluids_sample compile=1 model.flex_attn=1
+train_args=(
+    exp_id=bcat_baseline
+    data=fluids_sample
+    compile=1
+    model.flex_attn=1
+)
+torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py "${train_args[@]}"
 ```
 
-Example full inference script on 4 GPUs and all datasets (after training finishes):
-
+Example full inference script on 4 GPUs and all datasets (after training):
 ```bash
-torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py eval_only=1 use_wandb=0 exp_name=eval eval_from_exp=checkpoint/bcat_test/bcat_baseline log_eval_plots=-1 exp_id=bcat_baseline batch_size_eval=64 model.flex_attn=1
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=bcat_baseline
+    reload_model=checkpoint/bcat_test/bcat_baseline
+    batch_size_eval=64
+    model.flex_attn=1
+)
+torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py "${test_args[@]}"
 ```
 
-Previous training scripts can be found in `scripts/repo_archive.sh` and `scripts/archive.sh`.
+Previous training scripts can be found in `scripts/archive/paper_repro.sh` and `scripts/archive.sh`.
 
-For quick checks, use `dryrun=1` in `configs/main.yaml`. This runs 5 batches of training and 1 batch of evaluation. Results for dryrun are saved with experiment name `debug`.
+For quick checks, use `dryrun=X` in `configs/main.yaml`. This runs X batches of training and 1 batch of evaluation. Results for dryrun are saved with experiment name `debug`.
 
 ## Coding Style & Naming Conventions
 

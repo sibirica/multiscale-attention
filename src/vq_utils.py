@@ -1,6 +1,5 @@
 from logging import getLogger
 import torch
-from torch import nn
 import torch.nn.functional as F
 from utils.misc import to_cuda
 
@@ -10,11 +9,6 @@ from trainer import Trainer
 
 
 class VQTrainer(Trainer):
-    def __init__(self, modules, params, symbol_env):
-        super().__init__(modules, params, symbol_env)
-        self.commit_loss = 0.0
-        self.commit_loss_step = 0.0
-
     def prepare_data(self, samples, train=True):
         """
         Prepare data for training. (Split entire sequence into input and output, generate loss mask, move to cuda, etc.)
@@ -82,15 +76,9 @@ class VQTrainer(Trainer):
             output, diff = model("fwd", **model_input)
             data_loss = self.loss_fn(output, d["data_label"], d["data_mask"])
 
-        self.data_loss_step = data_loss.item()
-        self.data_loss += self.data_loss_step
-        self.commit_loss_step = diff.item()
-        self.commit_loss += self.commit_loss_step
-
         # optimize
-        self.optimize(data_loss + diff)
+        train_log = self.optimize(data_loss + diff)
+        train_log["data_loss"] = data_loss.item()
+        train_log["commit_loss"] = diff.item()
 
-        self.inner_epoch += 1
-        self.n_iter += 1
-        self.n_total_iter += 1
-        self.print_stats()
+        return train_log

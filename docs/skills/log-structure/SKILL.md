@@ -25,8 +25,8 @@ The `checkpoint/` directory contains training run outputs organized by `{exp_nam
 - **`train.log-X`**: Training process logs (rank X)
 - **`wandb/`**: Weights & Biases experiment tracking files
 
-#### 4. Visualizations: `evals_all/`
-- **Structure**: `evals_all/epoch_X_Y/` - evaluation outputs at epoch X for rank Y
+#### 4. Visualizations: `eval/`
+- **Structure**: `eval/epoch_X_Y/` - evaluation outputs at epoch X for rank Y
 - **Files**: `D_B.png` - visualization outputs for dataset D and batch B
 - **Purpose**: Visual outputs for debugging and analysis
 
