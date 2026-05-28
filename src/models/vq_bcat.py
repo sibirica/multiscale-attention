@@ -187,6 +187,21 @@ class VQBCAT(nn.Module):
 
         return data_output, labels
 
+    def setup_cache(self, max_batch_size: int, dtype):
+        if self.config.kv_cache:
+            self.cache = KVCache(
+                self.config.n_layer,
+                max_batch_size,
+                self.mask.size(0),
+                self.config.n_head,
+                self.config.dim_emb // self.config.n_head,
+                dtype=dtype,
+                device=next(self.parameters()).device,
+            )
+
+    def clear_cache(self):
+        self.cache = None
+
     @torch.compiler.disable()
     def generate(self, data_input, times, input_len: int, data_mask, carry_over_c=-1, **kwargs):
         """
@@ -215,11 +230,8 @@ class VQBCAT(nn.Module):
         cur_len = input_len
         prev_len = 0
 
-        config = self.config
-        if config.kv_cache:
-            cache = KVCache(
-                config.n_layer, data_input.shape[0], self.mask.size(0), config.n_head, config.dim_emb // config.n_head
-            )
+        if self.config.kv_cache:
+            self.cache.reset()
 
         for i in range(output_len):
             cur_data_input = data_all[:, :cur_len]  # (bs, cur_len, x_num, x_num)
@@ -236,7 +248,7 @@ class VQBCAT(nn.Module):
                 mask = self.mask[:data_len, :data_len]
 
             if self.config.kv_cache:
-                cur_data_encoded = self.transformer(cur_data_input, mask, cache=cache)
+                cur_data_encoded = self.transformer(cur_data_input, mask, cache=self.cache)
             else:
                 cur_data_encoded = self.transformer(cur_data_input, mask)  # (bs, data_len, dim)
 
@@ -280,9 +292,7 @@ class VQBCAT(nn.Module):
 
         config = self.config
         if config.kv_cache:
-            cache = KVCache(
-                config.n_layer, data_input.shape[0], self.mask.size(0), config.n_head, config.dim_emb // config.n_head
-            )
+            self.cache.reset()
 
         for i in range(output_len):
             cur_data_input = data_all[:, :cur_len]  # (bs, cur_len, x_num, x_num, data_dim)
@@ -300,7 +310,7 @@ class VQBCAT(nn.Module):
                 mask = self.mask[:data_len, :data_len]
 
             if self.config.kv_cache:
-                cur_data_encoded = self.transformer(cur_data_input, mask, cache=cache)
+                cur_data_encoded = self.transformer(cur_data_input, mask, cache=self.cache)
             else:
                 cur_data_encoded = self.transformer(cur_data_input, mask)  # (bs, data_len, dim)
 

@@ -176,6 +176,21 @@ class BCAT(nn.Module):
         data_output = self.embedder.decode(data_output)  # (bs, output_len, x_num, x_num, data_dim)
         return data_output
 
+    def setup_cache(self, max_batch_size: int, dtype):
+        if self.config.kv_cache:
+            self.cache = KVCache(
+                self.config.n_layer,
+                max_batch_size,
+                self.mask.size(0),
+                self.config.n_head,
+                self.config.dim_emb // self.config.n_head,
+                dtype=dtype,
+                device=next(self.parameters()).device,
+            )
+
+    def clear_cache(self):
+        self.cache = None
+
     @torch.compiler.disable()
     def generate(
         self,
@@ -207,11 +222,8 @@ class BCAT(nn.Module):
         cur_len = input_len
         prev_len = 0
 
-        config = self.config
-        if config.kv_cache:
-            cache = KVCache(
-                config.n_layer, data_input.shape[0], self.mask.size(0), config.n_head, config.dim_emb // config.n_head
-            )
+        if self.config.kv_cache:
+            self.cache.reset()
 
         if self.flex_attn and self.block_mask_prefil is None:
             seq_len_eval = self.block_size * input_len
@@ -237,7 +249,7 @@ class BCAT(nn.Module):
                     mask = self.mask[:data_len, :data_len]
 
             if self.config.kv_cache:
-                cur_data_encoded = self.transformer(cur_data_input, mask, block_mask=block_mask, cache=cache)
+                cur_data_encoded = self.transformer(cur_data_input, mask, block_mask=block_mask, cache=self.cache)
             else:
                 cur_data_encoded = self.transformer(cur_data_input, mask, block_mask=block_mask)  # (bs, data_len, dim)
 
@@ -425,6 +437,21 @@ class BCAT_Reg(nn.Module):
         data_output = self.embedder.decode(data_output)  # (bs, output_len, x_num, x_num, data_dim)
         return data_output
 
+    def setup_cache(self, max_batch_size: int, dtype):
+        if self.config.kv_cache:
+            self.cache = KVCache(
+                self.config.n_layer,
+                max_batch_size,
+                self.mask.size(0),
+                self.config.n_head,
+                self.config.dim_emb // self.config.n_head,
+                dtype=dtype,
+                device=next(self.parameters()).device,
+            )
+
+    def clear_cache(self):
+        self.cache = None
+
     @torch.compiler.disable()
     def generate(
         self,
@@ -456,11 +483,8 @@ class BCAT_Reg(nn.Module):
         cur_len = input_len
         prev_len = 0
 
-        config = self.config
-        if config.kv_cache:
-            cache = KVCache(
-                config.n_layer, data_input.shape[0], self.mask.size(0), config.n_head, config.dim_emb // config.n_head
-            )
+        if self.config.kv_cache:
+            self.cache.reset()
 
         for i in range(output_len):
             cur_data_input = data_all[:, :cur_len]  # (bs, cur_len, x_num, x_num, data_dim)
@@ -477,7 +501,7 @@ class BCAT_Reg(nn.Module):
                 mask = self.mask[:data_len, :data_len]
 
             if self.config.kv_cache:
-                cur_data_encoded = self.transformer(cur_data_input, mask, cache=cache)
+                cur_data_encoded = self.transformer(cur_data_input, mask, cache=self.cache)
             else:
                 cur_data_encoded = self.transformer(cur_data_input, mask)  # (bs, data_len, dim)
 

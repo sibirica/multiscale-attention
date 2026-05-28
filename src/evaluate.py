@@ -98,6 +98,8 @@ class Evaluator(object):
 
         model = self.modules["model"]
         model.eval()
+        model = model.module if hasattr(model, "module") else model
+        model.setup_cache(params.batch_size_eval, torch.bfloat16 if params.amp else torch.float32)
 
         if params.print_outputs:
             save_folder = params.dump_path / "eval/figures"
@@ -297,6 +299,8 @@ class Evaluator(object):
 
             results["size"] = eval_size
             all_results[type] = results
+
+        model.clear_cache()
 
         if params.multi_gpu:
             # sync results on all gpus

@@ -18,16 +18,18 @@ class KVCache:
     def __init__(
         self,
         n_layers: int,
-        batch_size: int,
+        max_batch_size: int,
         max_seq_len: int,
         num_kv_heads: int,
         head_dim: int,
+        dtype: torch.dtype,
+        device: torch.device,
     ) -> None:
         # super().__init__()
-        cache_shape = (batch_size, num_kv_heads, max_seq_len, head_dim)
+        cache_shape = (max_batch_size, num_kv_heads, max_seq_len, head_dim)
         self.cache_shape = cache_shape
-        self.k_cache = [None for _ in range(n_layers)]
-        self.v_cache = [None for _ in range(n_layers)]
+        self.k_cache = [torch.zeros(self.cache_shape, dtype=dtype, device=device) for _ in range(n_layers)]
+        self.v_cache = [torch.zeros(self.cache_shape, dtype=dtype, device=device) for _ in range(n_layers)]
         self.cache_pos = [torch.arange(0, max_seq_len) for _ in range(n_layers)]
         self.layer = 0
 
@@ -37,13 +39,6 @@ class KVCache:
 
     def set_layer(self, layer: int):
         self.layer = layer
-
-    def setup_cache(self, k_val, v_val):
-        if self.k_cache[self.layer] is not None:
-            return
-
-        self.k_cache[self.layer] = torch.zeros(self.cache_shape, dtype=k_val.dtype, device=k_val.device)
-        self.v_cache[self.layer] = torch.zeros(self.cache_shape, dtype=v_val.dtype, device=v_val.device)
 
     def reset(self):
         self.layer = 0
@@ -85,8 +80,6 @@ class KVCache:
             ValueError: if the batch size of the new key (or value) tensor is greater than the batch size
                 used during cache setup.
         """
-        self.setup_cache(k_val, v_val)
-
         bsz, _, seq_len, _ = k_val.shape
         l = self.layer
         k_cache, v_cache = self.k_cache[l], self.v_cache[l]

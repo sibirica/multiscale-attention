@@ -137,6 +137,21 @@ class BCAT_causal(nn.Module):
         data_output = self.embedder.decode(data_output)  # (bs, output_len, x_num, x_num, data_dim)
         return data_output
 
+    def setup_cache(self, max_batch_size: int, dtype):
+        if self.config.kv_cache:
+            self.cache = KVCache(
+                self.config.n_layer,
+                max_batch_size,
+                self.mask.size(0),
+                self.config.n_head,
+                self.config.dim_emb // self.config.n_head,
+                dtype=dtype,
+                device=next(self.parameters()).device,
+            )
+
+    def clear_cache(self):
+        self.cache = None
+
     @torch.compiler.disable()
     def generate(self, data_input, times, input_len: int, data_mask, **kwargs):
         """
@@ -176,20 +191,18 @@ class BCAT_causal(nn.Module):
 
         config = self.config
         if config.kv_cache:
-            cache = KVCache(
-                config.n_layer, data_input.shape[0], self.max_seq_len, config.n_head, config.dim_emb // config.n_head
-            )
+            self.cache.reset()
 
         for i in range(output_token_len):
             # (bs, cur_len*p*p, patch_dim=data_dim*patch_res^2) -> (bs, data_len=cur_len*p*p, d)
-            skip_len = cache.size if config.kv_cache else 0
+            skip_len = self.cache.size if config.kv_cache else 0
             cur_data_input = (
                 self.embedder.pre_proj(self.embedder.in_proj(all_patches[:, skip_len:cur_len]))
                 + pos_emb[:, skip_len:cur_len]
             )
 
             if self.config.kv_cache:
-                cur_data_encoded = self.transformer(cur_data_input, is_causal=True, cache=cache)
+                cur_data_encoded = self.transformer(cur_data_input, is_causal=True, cache=self.cache)
             else:
                 cur_data_encoded = self.transformer(cur_data_input, is_causal=True)  # (bs, data_len, d)
 
