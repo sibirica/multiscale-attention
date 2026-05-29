@@ -197,7 +197,6 @@ class ST_auto(nn.Module):
         data_output = self.embedder.decode(data_output)  # (bs, output_len, x_num, x_num, data_dim)
         return data_output
 
-    @torch.compiler.disable()
     def generate(self, data_input, times, input_len: int, data_mask, carry_over_c=-1, **kwargs):
         """
         Inputs:

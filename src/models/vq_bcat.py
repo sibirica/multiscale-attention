@@ -202,7 +202,6 @@ class VQBCAT(nn.Module):
     def clear_cache(self):
         self.cache = None
 
-    @torch.compiler.disable()
     def generate(self, data_input, times, input_len: int, data_mask, carry_over_c=-1, **kwargs):
         """
         Inputs:
@@ -265,7 +264,6 @@ class VQBCAT(nn.Module):
 
         return self.embedder.ids_to_data(data_all[:, input_len:]) * data_mask
 
-    @torch.compiler.disable()
     def generate2(self, data_input, times, input_len: int, data_mask, carry_over_c=-1, **kwargs):
         """
         Inputs:

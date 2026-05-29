@@ -191,7 +191,6 @@ class BCAT(nn.Module):
     def clear_cache(self):
         self.cache = None
 
-    @torch.compiler.disable()
     def generate(
         self,
         data_input: torch.Tensor,
@@ -267,7 +266,6 @@ class BCAT(nn.Module):
 
         return data_all[:, input_len:]
 
-    @torch.compiler.disable()
     def rollout(
         self,
         data_input: torch.Tensor,
@@ -452,7 +450,6 @@ class BCAT_Reg(nn.Module):
     def clear_cache(self):
         self.cache = None
 
-    @torch.compiler.disable()
     def generate(
         self,
         data_input: torch.Tensor,

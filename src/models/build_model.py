@@ -161,6 +161,8 @@ def build_model(params, model_config, data_config, symbol_env):
                 continue
 
             # modules[k] = torch.compile(v, mode="reduce-overhead")
-            modules[k] = torch.compile(v)
+            # modules[k] = torch.compile(v)
+            modules[k].fwd = torch.compile(modules[k].fwd)
+            # modules[k].generate = torch.compile(modules[k].generate)
 
     return modules
