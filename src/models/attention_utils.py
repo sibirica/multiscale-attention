@@ -441,18 +441,13 @@ class CacheCustomTransformerEncoderLayer(CustomTransformerEncoderLayer):
             check_other=False,
         )
 
-        new_len = src.size(1)
-        attn_mask = None
-        if new_len > 1 and src_mask is not None:
-            attn_mask = src_mask[..., -new_len:, :]
-
-        if new_len == 1:
+        if src.size(1) == 1:
             is_causal = False
 
         x = src
         x = x + self._sa_block(
             self.norm1(x),
-            attn_mask,
+            src_mask,
             src_key_padding_mask,
             block_mask=block_mask,
             is_causal=is_causal,
