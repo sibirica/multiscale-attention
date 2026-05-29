@@ -235,11 +235,6 @@ class BCAT(nn.Module):
                     pass  # TODO:
                 else:
                     mask = self.mask[(kv_len - self.seq_len_per_step) : kv_len]
-            else:
-                if self.flex_attn:
-                    pass  # TODO:
-                else:
-                    mask = self.mask[(kv_len - self.seq_len_per_step) : kv_len, :kv_len]
 
         return mask, block_mask
 
