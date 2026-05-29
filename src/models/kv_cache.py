@@ -15,6 +15,7 @@ class KVCache:
         head_dim: int,
         dtype: torch.dtype,
         device: torch.device,
+        return_full_cache: bool = False,
     ) -> None:
         cache_shape = (max_batch_size, num_kv_heads, max_seq_len, head_dim)
         self.k_cache = [torch.zeros(cache_shape, dtype=dtype, device=device) for _ in range(n_layers)]
@@ -23,6 +24,7 @@ class KVCache:
         self.n_layers = n_layers
         self.layer = 0
         self.device = device
+        self.return_full_cache = return_full_cache
 
     @property
     def size(self) -> int:
@@ -59,7 +61,11 @@ class KVCache:
         k_cache[:bsz, :, prev_len:cur_len] = k_val
         v_cache[:bsz, :, prev_len:cur_len] = v_val
 
-        k_out = k_cache[:bsz, :, :cur_len]
-        v_out = v_cache[:bsz, :, :cur_len]
+        if self.return_full_cache:
+            k_out = k_cache[:bsz]
+            v_out = v_cache[:bsz]
+        else:
+            k_out = k_cache[:bsz, :, :cur_len]
+            v_out = v_cache[:bsz, :, :cur_len]
 
         return k_out, v_out

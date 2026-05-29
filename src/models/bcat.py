@@ -102,6 +102,8 @@ class BCAT(nn.Module):
         mask = block_lower_triangular_mask(self.seq_len_per_step, max_data_len, use_float=True)
         self.register_buffer("mask", mask, persistent=False)
 
+        self.return_full_cache = False
+
         if self.flex_attn:
             block_size = config.patch_num**2
             seq_len = block_size * (max_data_len - 1)
@@ -116,6 +118,13 @@ class BCAT(nn.Module):
         s += f"\tEmbedder:        {sum([p.numel() for p in self.embedder.parameters() if p.requires_grad]):,}\n"
         s += f"\tTransformer:    {sum([p.numel() for p in self.transformer.parameters() if p.requires_grad]):,}"
         return s
+
+    def compile(self, params):
+        self.fwd = torch.compile(self.fwd)
+
+        if params.eval_only:
+            self.generate = torch.compile(self.generate)
+            self.return_full_cache = True
 
     def forward(self, mode: str, **kwargs):
         """
@@ -186,10 +195,53 @@ class BCAT(nn.Module):
                 self.config.dim_emb // self.config.n_head,
                 dtype=dtype,
                 device=next(self.parameters()).device,
+                return_full_cache=self.return_full_cache,
             )
 
     def clear_cache(self):
         self.cache = None
+
+    def prepare_masks(self, step: int, kv_len: int):
+        mask = block_mask = None
+        if not self.config.kv_cache:
+            # regular full square mask
+            if self.flex_attn:
+                block_mask = create_block_mask(
+                    partial(block_causal, block_size=self.block_size), None, None, kv_len, kv_len
+                )
+            else:
+                mask = self.mask[:kv_len, :kv_len]
+        elif step == 0:
+            # first step prefill mask
+            if self.return_full_cache:
+                if self.flex_attn:
+                    # TODO: modify
+                    block_mask = create_block_mask(
+                        partial(block_causal, block_size=self.block_size), None, None, kv_len, kv_len
+                    )
+                else:
+                    mask = self.mask[:kv_len]
+            else:
+                if self.flex_attn:
+                    block_mask = create_block_mask(
+                        partial(block_causal, block_size=self.block_size), None, None, kv_len, kv_len
+                    )
+                else:
+                    mask = self.mask[:kv_len, :kv_len]
+        else:
+            # decode mask for kv cache
+            if self.return_full_cache:
+                if self.flex_attn:
+                    pass  # TODO:
+                else:
+                    mask = self.mask[(kv_len - self.seq_len_per_step) : kv_len]
+            else:
+                if self.flex_attn:
+                    pass  # TODO:
+                else:
+                    mask = self.mask[(kv_len - self.seq_len_per_step) : kv_len, :kv_len]
+
+        return mask, block_mask
 
     def generate(
         self,
@@ -224,12 +276,6 @@ class BCAT(nn.Module):
         if self.config.kv_cache:
             self.cache.reset()
 
-        if self.flex_attn and self.block_mask_prefil is None:
-            seq_len_eval = self.block_size * input_len
-            self.block_mask_prefil = create_block_mask(
-                partial(block_causal, block_size=self.block_size), None, None, seq_len_eval, seq_len_eval
-            )
-
         for i in range(output_len):
             cur_data_input = data_all[:, :cur_len]  # (bs, cur_len, x_num, x_num, data_dim)
 
@@ -239,13 +285,7 @@ class BCAT(nn.Module):
                 cur_data_input, times[:, :cur_len], skip_len=skip_len
             )  # (bs, data_len, dim)
 
-            mask = block_mask = None
-            if (not self.config.kv_cache) or i == 0:
-                if self.flex_attn:
-                    block_mask = self.block_mask_prefil
-                else:
-                    data_len = cur_len * self.seq_len_per_step
-                    mask = self.mask[:data_len, :data_len]
+            mask, block_mask = self.prepare_masks(i, kv_len=cur_len * self.seq_len_per_step)
 
             if self.config.kv_cache:
                 cur_data_encoded = self.transformer(cur_data_input, mask, block_mask=block_mask, cache=self.cache)
@@ -450,6 +490,7 @@ class BCAT_Reg(nn.Module):
     def clear_cache(self):
         self.cache = None
 
+    @torch.compiler.disable()
     def generate(
         self,
         data_input: torch.Tensor,
