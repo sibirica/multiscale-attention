@@ -215,10 +215,11 @@ class BCAT(nn.Module):
             # first step prefill mask
             if self.return_full_cache:
                 if self.flex_attn:
-                    # TODO: modify
-                    block_mask = create_block_mask(
-                        partial(block_causal, block_size=self.block_size), None, None, kv_len, kv_len
-                    )
+
+                    def block_causal2(b, h, q_idx, kv_idx):
+                        return ((q_idx // self.block_size) >= (kv_idx // self.block_size)) & (kv_idx < kv_len)
+
+                    block_mask = create_block_mask(block_causal2, None, None, kv_len, self.mask.size(0))
                 else:
                     mask = self.mask[:kv_len]
             else:
@@ -232,7 +233,11 @@ class BCAT(nn.Module):
             # decode mask for kv cache
             if self.return_full_cache:
                 if self.flex_attn:
-                    pass  # TODO:
+
+                    def block_mask3(b, h, q_idx, kv_idx):
+                        return kv_idx < kv_len
+
+                    block_mask = create_block_mask(block_mask3, None, None, self.seq_len_per_step, self.mask.size(0))
                 else:
                     mask = self.mask[(kv_len - self.seq_len_per_step) : kv_len]
 
