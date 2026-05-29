@@ -152,6 +152,7 @@ class BCAT_causal(nn.Module):
     def clear_cache(self):
         self.cache = None
 
+    @torch.compiler.disable()
     def generate(self, data_input, times, input_len: int, data_mask, **kwargs):
         """
         Inputs:
