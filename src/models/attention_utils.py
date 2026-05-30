@@ -10,7 +10,6 @@ import torch.nn.functional as F
 from functools import partial
 from typing import Callable
 from torch import Tensor
-from torch.utils.checkpoint import checkpoint
 
 from einops import rearrange
 
@@ -20,6 +19,7 @@ from torch.nn.attention.flex_attention import flex_attention
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from models.kv_cache import KVCache
+from models.checkpoint_wrapper import checkpoint_wrapper
 
 N_MAX_POSITIONS = 4096  # maximum input sequence length
 flex_attn_compiled = torch.compile(flex_attention)
@@ -245,7 +245,6 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
         qk_norm: bool = False,
         flex_attn: bool = False,
         logit_softcap: float = 0,
-        activation_checkpointing: bool = False,
     ) -> None:
         factory_kwargs = {"device": device, "dtype": dtype}
         super(nn.TransformerEncoderLayer, self).__init__()
@@ -262,7 +261,6 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
         self.ffn = FFN(d_model, dim_feedforward, activation, dropout, bias)
 
         self.norm_first = norm_first
-        self.activation_checkpointing = activation_checkpointing
 
         self.norm1 = norm(d_model, eps=layer_norm_eps, **factory_kwargs)
         self.norm2 = norm(d_model, eps=layer_norm_eps, **factory_kwargs)
@@ -363,6 +361,10 @@ class CustomTransformerEncoder(nn.Module):
             self.rotary_emb = None
             self.rotary = False
 
+        if config is not None and config.activation_checkpointing:
+            for layer in self.layers:
+                checkpoint_wrapper(layer)
+
     def forward(
         self,
         src: Tensor,
@@ -390,31 +392,14 @@ class CustomTransformerEncoder(nn.Module):
 
         output = src
         for mod in self.layers:
-            if self.training and mod.activation_checkpointing and torch.is_grad_enabled():
-
-                def make_forward(layer: nn.Module) -> Callable[[Tensor], Tensor]:
-                    def forward(output: Tensor) -> Tensor:
-                        return layer(
-                            output,
-                            src_mask=mask,
-                            is_causal=is_causal,
-                            src_key_padding_mask=src_key_padding_mask,
-                            block_mask=block_mask,
-                            rotary_emb=self.rotary_emb,
-                        )
-
-                    return forward
-
-                output = checkpoint(make_forward(mod), output, use_reentrant=False)
-            else:
-                output = mod(
-                    output,
-                    src_mask=mask,
-                    is_causal=is_causal,
-                    src_key_padding_mask=src_key_padding_mask,
-                    block_mask=block_mask,
-                    rotary_emb=self.rotary_emb,
-                )
+            output = mod(
+                output,
+                src_mask=mask,
+                is_causal=is_causal,
+                src_key_padding_mask=src_key_padding_mask,
+                block_mask=block_mask,
+                rotary_emb=self.rotary_emb,
+            )
 
         if self.norm is not None:
             output = self.norm(output)

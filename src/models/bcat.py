@@ -81,7 +81,6 @@ class BCAT(nn.Module):
             "flex_attn": self.flex_attn,
             "bias": config.get("bias", True),
             "logit_softcap": config.get("logit_softcap", 0),
-            "activation_checkpointing": config.activation_checkpointing,
         }
 
         if config.kv_cache:
