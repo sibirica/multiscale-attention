@@ -4,7 +4,7 @@ name: vq_bcat_auto
 n_layer: 12
 dim_emb: 1024
 dim_ffn: 2752
-dropout: 0
+dropout: 0.1
 n_head: 8
 norm_first: true
 positional_embedding: null
@@ -28,9 +28,9 @@ embedder:
 
     codebook_size: 4096
 
-    z_ch: 512
-    mid_ch: 32
+    z_ch: 1024
+    mid_ch: 64
     ch_mult: [1, 2, 4, 8]
 
     # path: null
-    path: checkpoint/ts/vqvae_1/checkpoint.pth
+    path: checkpoint/ts/vqvae_2/checkpoint.pth
