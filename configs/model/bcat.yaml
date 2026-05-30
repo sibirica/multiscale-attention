@@ -18,6 +18,7 @@ bias: 1
 logit_softcap: 0 # only works with flex_attn=1
 
 flex_attn: 0
+activation_checkpointing: 0
 kv_cache: 1
 
 patch_num: 16 # for input, number of patches per dimension
