@@ -37,6 +37,7 @@ test_args=(
     log_eval_plots=-1
     exp_name=eval
     exp_id=${expid}
+    data=arena
     reload_model=checkpoint/bcat/${expid}
     batch_size_eval=64
     model.flex_attn=1
