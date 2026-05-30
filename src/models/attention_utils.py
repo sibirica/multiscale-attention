@@ -361,7 +361,7 @@ class CustomTransformerEncoder(nn.Module):
             self.rotary_emb = None
             self.rotary = False
 
-        if config is not None and config.activation_checkpointing:
+        if config is not None and config.act_ckpt:
             for layer in self.layers:
                 checkpoint_wrapper(layer)
 
