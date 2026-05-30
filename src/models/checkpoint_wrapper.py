@@ -18,10 +18,12 @@ def checkpoint_wrapper(module: nn.Module) -> nn.Module:
         if not module.training or not torch.is_grad_enabled():
             return original_forward(*args, **kwargs)
 
-        def forward(*args: Any) -> Any:
-            return original_forward(*args, **kwargs)
-
-        return checkpoint(forward, *args, use_reentrant=False)
+        return checkpoint(
+            original_forward,
+            *args,
+            use_reentrant=False,
+            **kwargs,
+        )
 
     module.forward = checkpointed_forward
     module._activation_checkpoint_wrapped = True
