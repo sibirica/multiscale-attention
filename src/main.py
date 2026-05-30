@@ -13,7 +13,6 @@ import hydra
 
 from trainer import Trainer
 from evaluate import Evaluator, metric_to_header
-from vq_utils import VQTrainer
 
 
 torch.multiprocessing.set_sharing_strategy("file_system")
@@ -110,10 +109,7 @@ def main(params: DictConfig):
     if params.use_wandb and params.wandb.watch:
         wandb.watch(modules["model"], log="all")
 
-    if params.train_vq:
-        trainer = VQTrainer(modules, params, symbol_env)
-    else:
-        trainer = Trainer(modules, params, symbol_env)
+    trainer = Trainer(modules, params, symbol_env)
     evaluator = Evaluator(trainer, symbol_env)
 
     if params.eval_only:

@@ -21,26 +21,6 @@ def build_model(params, model_config, data_config, symbol_env):
                 model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
             )
 
-        case "vq_bcat_auto":
-            from .vq_bcat import VQBCAT
-
-            modules["model"] = VQBCAT(
-                model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
-            )
-
-        case "vqvae":
-            from .vq.vqvae import VQModelWrapper
-
-            config = model_config.embedder
-            modules["model"] = VQModelWrapper(
-                n_embed=config.codebook_size,
-                embed_dim=config.dim,
-                z_ch=config.z_ch,
-                in_ch=data_config.max_output_dimension,
-                mid_ch=config.mid_ch,
-                ch_mult=config.ch_mult,
-            )
-
         case "bcat_reg_auto":
             from .bcat import BCAT_Reg
 

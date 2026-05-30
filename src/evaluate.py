@@ -255,8 +255,6 @@ class Evaluator(object):
                     plot_title = "Epoch {} | Type {} | idx {} | {:.4f}".format(
                         self.trainer.epoch, type, index, cur_result["_l2_error"][0]
                     )
-                    if params.train_vq:
-                        output = output[params.input_len :]
                     path = plot_2d_pde(
                         output,
                         cur_data,

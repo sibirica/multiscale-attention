@@ -8,7 +8,7 @@ This repository hosts **BCAT**, a Block Causal Transformer PDE foundation model 
   - `main.py`, `trainer.py`, `evaluate.py` — entrypoint, training loop, evaluation loop.
   - `dataset.py`, `data_utils/` — dataset wrappers, collation, and conversion scripts (see `src/data_utils/README.md`).
   - `models/` — all model cases, including `bcat.py`, `prose.py`, `transformer.py`, and baselines.
-  - `symbol_utils/`, `utils/`, `vq_utils.py` — symbolic encoders, logging/metrics helpers, VQ utilities.
+  - `symbol_utils/`, `utils/` — symbolic encoders, logging/metrics helpers.
 - `configs/` — Hydra configs: `main.yaml` plus `data/`, `model/`, `optim/` groups.
 - `scripts/` — Shell scripts for training and evaluation, and archives of past runs.
 - `notebooks/` — Jupyter notebooks for visualization and result analysis.

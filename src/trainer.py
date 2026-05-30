@@ -392,18 +392,6 @@ class Trainer(object):
             batch = next(self.data_iter)
         return batch
 
-    def vq_loss_fn(self, data_output, labels, data_mask):
-        """
-        data_output:    Tensor:    (b, t, px, py, codebook_size)
-        labels:         LongTensor (b, t, px, py)
-
-            NOTE: ignore mask for now
-        """
-        output = data_output.flatten(end_dim=-2)
-        target = labels.flatten()
-        loss = F.cross_entropy(output, target)
-        return loss
-
     def diffusion_loss_fn(self, output_d, data_mask):
         """
         input shape: (b, c, x, y)
@@ -618,10 +606,7 @@ class Trainer(object):
         """
 
         with torch.amp.autocast("cpu" if params.cpu else "cuda", enabled=bool(params.amp), dtype=torch.bfloat16):
-            if self.params.model.name.startswith("vq"):
-                data_output, labels = model("fwd", **model_input)
-                data_loss = self.vq_loss_fn(data_output, labels, d["data_mask"])
-            elif self.params.model.name.startswith("diffusion"):
+            if self.params.model.name.startswith("diffusion"):
                 output_d = model("fwd", **model_input)
                 data_loss = self.diffusion_loss_fn(output_d, d["data_mask"])
             else:

@@ -4,10 +4,6 @@
 expid=bcat_1
 python src/main.py eval_only=1 use_wandb=0 exp_name=save reload_model=checkpoint/ts/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 data=arena save_outputs=1 eval_size=1 data.max_output_dimension=4
 
-# vqcae + bcat
-expid=vqbcat_2
-python src/main.py eval_only=1 use_wandb=0 exp_name=save reload_model=checkpoint/ts/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 data=arena model=vq_bcat save_outputs=1 eval_size=1
-
 # vae + bcat
 expid=bcat_2
 python src/main.py eval_only=1 use_wandb=0 exp_name=save reload_model=checkpoint/ts/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 data=arena model=bcat_resnet save_outputs=1 eval_size=1
