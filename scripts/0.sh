@@ -1,7 +1,27 @@
 GPU=1
 GPUs=0,1
 
+export CUDA_VISIBLE_DEVICES="${GPUs}"
+
 expid=bcat_baseline
-torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py exp_id=${expid} batch_size=32 data=fluids_sample compile=1 model.flex_attn=1 &&
-torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py eval_only=1 use_wandb=0 exp_name=eval eval_from_exp=checkpoint/bcat_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model.flex_attn=1
-torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py eval_only=1 use_wandb=0 exp_name=eval eval_from_exp=checkpoint/bcat_test/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 model.flex_attn=1 overfit_test=1
+train_args=(
+    exp_id=${expid}
+    data=arena
+    max_epoch=20
+    compile=1
+    model.flex_attn=1
+)
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=${expid}
+    reload_model=checkpoint/bcat/${expid}
+    batch_size_eval=64
+    model.flex_attn=1
+    compile=1
+)
+torchrun --standalone --nnodes 1 --nproc_per_node 2 src/main.py "${train_args[@]}" &&
+torchrun --standalone --nnodes 1 --nproc_per_node 2 src/main.py "${test_args[@]}" &&   
+torchrun --standalone --nnodes 1 --nproc_per_node 2 src/main.py "${test_args[@]}" overfit_test=1

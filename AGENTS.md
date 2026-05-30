@@ -44,7 +44,7 @@ test_args=(
     log_eval_plots=-1
     exp_name=eval
     exp_id=bcat_baseline
-    reload_model=checkpoint/bcat_test/bcat_baseline
+    reload_model=checkpoint/bcat/bcat_baseline
     batch_size_eval=64
     model.flex_attn=1
 )
