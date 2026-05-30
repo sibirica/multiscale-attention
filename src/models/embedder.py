@@ -23,8 +23,6 @@ def get_embedder(config, x_num: int, max_output_dim: int):
             embedder = ConvEmbedder
         case "patch":
             embedder = PatchEmbedder
-        case "resnet":
-            embedder = ResNetEmbedder
         case "conv_reg":
             embedder = ConvRegEmbedder
         case _:
@@ -428,97 +426,6 @@ class PatchEmbedder(nn.Module):
 
         data_output = self.post_proj(data_output)  # (bs*output_len, data_dim, x_num, x_num)
         data_output = self.head(data_output)
-        data_output = rearrange(data_output, "(b t) c h w -> b t h w c", b=bs)
-        return data_output
-
-
-class ResNetEmbedder(nn.Module):
-    """
-    Preprocess data (break into patches) and embed them into target dimension. TODO: modify name for Muon.
-    """
-
-    def __init__(self, config, x_num: int, data_dim: int):
-        super().__init__()
-        self.config = config
-
-        self.dim = config.dim
-        self.data_dim = data_dim
-        act = get_activation("gelu")
-
-        ## for encoder part
-
-        self.patch_position_embeddings = get_embeddings((1, 1, config.patch_num * config.patch_num, self.dim))
-
-        self.time_embed_type = config.get("time_embed", "continuous")
-        match self.time_embed_type:
-            case "continuous":
-                self.time_proj = nn.Sequential(
-                    nn.Linear(1, self.dim),
-                    act(),
-                    nn.Linear(self.dim, self.dim),
-                )
-            case "learnable":
-                self.time_embed = get_embeddings((1, config.get("max_time_len", 10), 1, self.dim))
-
-        ddconfig = dict(
-            dropout=config.dropout,
-            in_channels=data_dim,
-            ch=config.mid_ch,
-            z_channels=config.z_ch,
-            ch_mult=config.ch_mult,
-            num_res_blocks=2,
-            using_sa=config.using_sa,
-            using_mid_sa=config.using_mid_sa,
-        )
-
-        self.encoder = Encoder(**ddconfig)
-        self.decoder = Decoder(**ddconfig)
-        self.quant_conv = torch.nn.Conv2d(config.z_ch, self.dim, 1)
-        self.post_quant_conv = torch.nn.Conv2d(self.dim, config.z_ch, 1)
-
-    def encode(self, data: torch.Tensor, times: torch.Tensor, skip_len: int = 0):
-        """
-        Input:
-            data:           Tensor (bs, input_len, x_num, x_num, data_dim)
-            times:          Tensor (bs, input_len, 1)
-        Output:
-            data:           Tensor (bs, data_len, dim)      data_len = input_len * patch_num * patch_num
-                            embedded data + time embeddings + patch position embeddings
-        """
-
-        bs = data.size(0)
-        data = rearrange(data[:, skip_len:], "b t h w c -> (b t) c h w")
-        data = self.encoder(data)
-        data = self.quant_conv(data)
-        data = rearrange(data, "(b t) d h w -> b t (h w) d", b=bs)  # (bs, input_len, p*p, dim)
-
-        match self.time_embed_type:
-            case "continuous":
-                time_embeddings = self.time_proj(times[:, skip_len:])[:, :, None]  # (bs, input_len, 1, dim)
-                data = data + time_embeddings
-            case "learnable":
-                time_embeddings = self.time_embed[:, skip_len : times.size(1)]  # (bs, input_len, 1, dim)
-                data = data + time_embeddings
-
-        data = data + self.patch_position_embeddings  # (b, input_len, p*p, d)
-
-        data = data.reshape(bs, -1, self.dim)
-        return data
-
-    def decode(self, data_output: torch.Tensor):
-        """
-        Input:
-            data_output:     Tensor (bs, query_len, dim)
-                             query_len = output_len * patch_num * patch_num
-        Output:
-            data_output:     Tensor (bs, output_len, x_num, x_num, data_dim)
-        """
-        bs = data_output.size(0)
-        data_output = rearrange(
-            data_output, "b (t h w) d -> (b t) d h w", h=self.config.patch_num, w=self.config.patch_num
-        )
-        data_output = self.post_quant_conv(data_output)
-        data_output = self.decoder(data_output)
         data_output = rearrange(data_output, "(b t) c h w -> b t h w c", b=bs)
         return data_output
 
