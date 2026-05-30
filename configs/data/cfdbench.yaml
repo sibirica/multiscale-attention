@@ -20,11 +20,6 @@ sampler:
   uniform: 1
   
   # when uniform=1, the following will be ignored. Otherwise, the probabilities will be normalized
-  shallow_water: 1
-  incom_ns: 2
-  com_ns: 1
-  incom_ns_arena: 2
-  incom_ns_arena_u: 1
   cfdbench: 1
 
 cfdbench:

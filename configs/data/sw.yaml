@@ -21,14 +21,9 @@ sampler:
   
   # when uniform=1, the following will be ignored. Otherwise, the probabilities will be normalized
   shallow_water: 1
-  incom_ns: 2
-  com_ns: 1
-  incom_ns_arena: 2
-  incom_ns_arena_u: 1
-  cfdbench: 1
 
 shallow_water:
-  data_path: /s1/shared/dataset/pdebench/2D/shallow-water/2D_rdb_NA_NA.h5
+  data_path: /data/shared/dataset/pdebench/2D/shallow-water/2D_rdb_NA_NA.h5
   t_step: 1 # 5, dt=0.01
   x_num: 128
   dim: 1

@@ -20,15 +20,10 @@ sampler:
   uniform: 1
   
   # when uniform=1, the following will be ignored. Otherwise, the probabilities will be normalized
-  shallow_water: 1
-  incom_ns: 2
-  com_ns: 1
-  incom_ns_arena: 2
-  incom_ns_arena_u: 1
-  cfdbench: 1
+  incom_ns: 1
 
 incom_ns:
-  folder: /s1/shared/dataset/pdebench/2D/NS_incom/converted
+  folder: /data/shared/dataset/pdebench/2D/NS_incom/converted
   t_step: 1 # 10, dt=0.005
   x_num: 128
   dim: 3

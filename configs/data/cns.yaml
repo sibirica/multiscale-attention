@@ -20,17 +20,12 @@ sampler:
   uniform: 1
   
   # when uniform=1, the following will be ignored. Otherwise, the probabilities will be normalized
-  shallow_water: 1
-  incom_ns: 2
   com_ns: 1
-  incom_ns_arena: 2
-  incom_ns_arena_u: 1
-  cfdbench: 1
 
 com_ns:
   folders:
-    rand: /s1/shared/dataset/pdebench/2D/CFD/2D_Train_Rand
-    turb: /s1/shared/dataset/pdebench/2D/CFD/2D_Train_Turb
+    rand: /data/shared/dataset/pdebench/2D/CFD/2D_Train_Rand
+    turb: /data/shared/dataset/pdebench/2D/CFD/2D_Train_Turb
   type: all
   t_step: 1 # dt=0.05
   x_num: 128

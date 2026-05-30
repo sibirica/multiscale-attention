@@ -7,7 +7,7 @@ expid=fno
 CUDA_VISIBLE_DEVICES=$GPU python src/main.py exp_id=${expid} batch_size=64 model=fno amp=0 &&
 CUDA_VISIBLE_DEVICES=$GPU python src/main.py eval_only=1 use_wandb=0 exp_name=eval reload_model=checkpoint/bcat/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=128 model=fno amp=0
 
-for ds in "sw" "cns" "arena_ns" "arena_ns_cond" "ins" "cfdbench"
+for ds in "sw" "cns" "arena_u" "arena" "ins" "cfdbench"
 do
     expid="fno_${ds}"
     torchrun --standalone --nnodes 1 --nproc_per_node 2 src/main.pyt exp_id=${expid} batch_size=24 model=fno amp=0 max_epoch=5 data=${ds} &&
@@ -20,7 +20,7 @@ expid=unet
 CUDA_VISIBLE_DEVICES=$GPU python src/main.py exp_id=${expid} batch_size=160 model=unet &&
 CUDA_VISIBLE_DEVICES=$GPU python src/main.py eval_only=1 use_wandb=0 exp_name=eval reload_model=checkpoint/bcat/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=256 model=unet
 
-for ds in "sw" "cns" "arena_ns" "arena_ns_cond" "ins" "cfdbench"
+for ds in "sw" "cns" "arena_u" "arena" "ins" "cfdbench"
 do
     expid="unet_${ds}"
     CUDA_VISIBLE_DEVICES=$GPU python src/main.py exp_id=${expid} batch_size=64 model=unet max_epoch=5 data=${ds} &&
@@ -33,7 +33,7 @@ expid=don
 CUDA_VISIBLE_DEVICES=$GPU python src/main.py exp_id=${expid} batch_size=128 model=deeponet &&
 CUDA_VISIBLE_DEVICES=$GPU python src/main.py eval_only=1 use_wandb=0 exp_name=eval reload_model=checkpoint/bcat/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=128 model=deeponet
 
-for ds in "sw" "cns" "arena_ns" "arena_ns_cond" "ins" "cfdbench"
+for ds in "sw" "cns" "arena_u" "arena" "ins" "cfdbench"
 do
     expid="don_${ds}"
     CUDA_VISIBLE_DEVICES=$GPU python src/main.py exp_id=${expid} batch_size=128 model=deeponet max_epoch=5 data=${ds} &&
