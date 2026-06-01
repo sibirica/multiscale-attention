@@ -2,9 +2,9 @@ name: multiscale_bcat_auto
 
 # shared attributes
 n_layer: 6 # 12
-dim_emb: 640 # 1024 # fast embedding dimension
+dim_emb: 448 # 640 # 1024 # fast embedding dimension
 slow_dim: ${.dim_emb}
-dim_ffn: 1664 # 2752
+dim_ffn: 1152 # 1664 # 2752
 pool_dim: ${.dim_ffn} # hidden layer size of slow layer encoding ffn
 dropout: 0
 attn_dropout: 0
@@ -35,7 +35,7 @@ log_recombine_norms: 0
 log_recombine_norms_mode: always # choose from [inference, always]
 log_once: 1
 
-patch_num: 8 #16 # for input, number of patches per dimension
+patch_num: 16 #8 # for input, number of patches per dimension
 patch_num_output: ${.patch_num} # for output, number of patches per dimension
 
 embedder:

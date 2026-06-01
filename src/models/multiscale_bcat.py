@@ -1,5 +1,7 @@
 """
 Autoregressive multiscale BCAT model.
+
+Note: there seems to be no actual benefit to dynamic compilation - maybe remove.
 """
 
 from logging import getLogger
