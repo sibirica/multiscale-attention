@@ -10,7 +10,7 @@ from logging import getLogger
 
 from collections import OrderedDict
 
-#from neuralop.models import FNO3d
+from neuralop.models import FNO as FNO_lib
 
 from .transformer import TransformerDataEncoder
 from .embedder import get_embedder
@@ -77,10 +77,8 @@ class FNO(nn.Module):
     def __init__(self, config, max_output_dim):
         super().__init__()
         self.config = config
-        self.fno = FNO3d(
-            n_modes_height=config.n_modes_height,
-            n_modes_width=config.n_modes_width,
-            n_modes_depth=config.n_modes_depth,
+        self.fno = FNO_lib(
+            n_mode=(config.n_modes_height, config.n_modes_width, config.n_modes_depth),
             hidden_channels=config.hidden_channels,
             in_channels=max_output_dim,
             out_channels=max_output_dim,
@@ -119,7 +117,6 @@ class FNO(nn.Module):
 
 
 class UNet(nn.Module):
-
     def __init__(self, config, max_output_dim):
         super().__init__()
         self.config = config
@@ -339,7 +336,6 @@ class branch(nn.Module):
         self.set_lay = nn.ModuleList([OneInputBasis(self.num_sensors, self.dim1) for _ in range(self.basis_dim)])
 
     def forward(self, v):
-
         w = self.set_lay[0](v)
 
         for ii in range(self.basis_dim - 1):
@@ -418,7 +414,6 @@ class DeepONet(nn.Module):
             raise Exception(f"Unknown mode: {mode}")
 
     def fwd(self, data_input, output_times, **kwargs):
-
         meshgrid = self.meshgrid
         bs = data_input.shape[0]
         data = patchify(data_input, self.patch_num)  # (bs, input_len, p*p, x*y*d)

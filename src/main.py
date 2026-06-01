@@ -1,4 +1,3 @@
-import os
 import wandb
 import numpy as np
 from pathlib import Path
@@ -16,46 +15,42 @@ import hydra
 from trainer import Trainer
 from evaluate import Evaluator, metric_to_header
 
-# import torch._dynamo
-# torch._dynamo.config.optimize_ddp = False
 
 torch.multiprocessing.set_sharing_strategy("file_system")
-
-# np.seterr(all="raise")
 np.seterr(divide="raise", under="ignore", over="raise", invalid="raise")
+torch._dynamo.config.optimize_ddp = False
 
-torch._dynamo.config.optimize_ddp = False  # fix an issue when using DDP with torch.compile
 
-
-@hydra.main(version_base=None, config_path="configs", config_name="main")
+@hydra.main(version_base=None, config_path="../configs", config_name="main")
 def main(params: DictConfig):
-
     if params.dryrun:
-        print("Debugging run...")
+        print("---------------------------------")
+        print("----------- Debug Run -----------")
+        print("---------------------------------")
         params.max_epoch = 1
-        params.n_steps_per_epoch = 5
-        params.debug = True
+        params.n_steps_per_epoch = int(params.dryrun)
         params.exp_name = "debug"
         params.use_wandb = 0
-        params.wandb.entity = None
         params.save_periodic = 0
         params.log_periodic = 1
-        if not params.batch_size_eval:
-            params.batch_size_eval = int(1.5 * params.batch_size)
-        # params.eval_size = params.batch_size_eval * 2
         params.eval_size = 1
         params.base_seed = 1
         params.log_eval_plots = -1
 
     if params.eval_only:
-        assert params.eval_from_exp is not None and params.eval_from_exp != ""
-        if os.path.exists(params.eval_from_exp + "/best-" + params.validation_metrics + ".pth"):
-            params.reload_model = params.eval_from_exp + "/best-" + params.validation_metrics + ".pth"
-        elif os.path.exists(params.eval_from_exp + "/checkpoint.pth"):
-            params.reload_model = params.eval_from_exp + "/checkpoint.pth"
+        if params.get("reload_model", None):
+            reload_model = Path(params.reload_model)
         else:
-            assert os.path.exists(params.eval_from_exp)
-            params.reload_model = params.eval_from_exp
+            eval_from_exp = params.get("eval_from_exp", None)
+            assert eval_from_exp
+            reload_model = Path(eval_from_exp)
+        if (reload_model / f"best-{params.validation_metrics}.pth").exists():
+            params.reload_model = str(reload_model / f"best-{params.validation_metrics}.pth")
+        elif (reload_model / "checkpoint.pth").exists():
+            params.reload_model = str(reload_model / "checkpoint.pth")
+        else:
+            assert reload_model.is_file()
+            params.reload_model = str(reload_model)
 
         if params.overfit_test and params.exp_id:
             params.exp_id = params.exp_id + "_train"
@@ -72,27 +67,18 @@ def main(params: DictConfig):
     utils.misc.CUDA = not params.cpu
 
     if "warmup" in params.optim:
-        if params.optim.warmup is not None and params.optim.warmup < 1:
-            params.optim.warmup = max(
-                1, int(params.optim.warmup * params.max_epoch * params.n_steps_per_epoch // params.accumulate_gradients)
-            )
         params.optim.max_iters = params.max_epoch * params.n_steps_per_epoch // params.accumulate_gradients
-
+        if params.optim.warmup is not None and params.optim.warmup < 1:
+            params.optim.warmup = max(1, int(params.optim.warmup * params.optim.max_iters))
     if params.batch_size_eval is None:
         params.batch_size_eval = int(1.5 * params.batch_size)
 
     # initialize experiment / logger / config
     logger = initialize_exp(params)
 
-    if params.eval_dump_path is None:
-        params.eval_dump_path = Path(params.dump_path) / "evals_all"
-        os.makedirs(params.eval_dump_path, exist_ok=True)
-
     # wandb logging
     if not params.is_master:
         params.use_wandb = False
-    # Standalone eval (eval_only=1) should not open a new W&B run just because
-    # use_wandb defaults to 1 in yaml. Opt in with eval_log_wandb=1.
     if params.eval_only and not params.get("eval_log_wandb", False):
         params.use_wandb = False
     if params.use_wandb:
@@ -107,7 +93,7 @@ def main(params: DictConfig):
             name=params.wandb.name,
             entity=params.wandb.entity,
             notes=params.wandb.notes,
-            dir=params.dump_path,
+            dir=str(params.dump_path),
         )
 
         # log configs on wandb, convert to dict
@@ -140,7 +126,6 @@ def main(params: DictConfig):
     evaluator = Evaluator(trainer, symbol_env)
 
     if params.eval_only:
-
         stats, _ = evaluator.evaluate()
 
         s = "Eval | data loss = {:.6f}".format(stats["data_loss"])
@@ -149,39 +134,20 @@ def main(params: DictConfig):
         logger.info(s)
 
         max_mem = torch.cuda.max_memory_allocated() / 1024**2
-        s_mem = "MEM: {:.2f} MB".format(max_mem)
-        logger.info(s_mem)
-
-        if params.use_wandb:
-            wandb.finish()
-
-        exit()
+        logger.info("MEM: {:.2f} MB".format(max_mem))
+        return
 
     while trainer.epoch < params.max_epoch:
         logger.info(f"============ Starting epoch {trainer.epoch} ... ============")
 
-        trainer.inner_epoch = 0
-        while trainer.inner_epoch < trainer.n_steps_per_epoch:
-            trainer.iter()
-
-            if (params.log_periodic > 0) and (trainer.inner_epoch % params.log_periodic == 0):
-                data_loss = trainer.data_loss / params.log_periodic
-                trainer.data_loss = 0.0
-
-                logger.info(
-                    "Epoch {} | step {} | data loss = {:.8f}".format(trainer.epoch, trainer.inner_epoch, data_loss)
-                )
-
-            if params.use_wandb:
-                logs = {"data_loss": trainer.data_loss_step, "step": trainer.n_total_iter}
-                if trainer.grad_norm is not None and (trainer.n_iter + 1) % params.accumulate_gradients == 0:
-                    logs["grad_norm"] = trainer.grad_norm
-
-                wandb.log({"train": logs})
+        trainer.n_iter = 0
+        while trainer.n_iter < trainer.n_steps_per_epoch:
+            train_log = trainer.iter()
+            trainer.n_iter += 1
+            trainer.n_total_iter += 1
+            trainer.log_train_stats(train_log)
 
         logger.info(f"============ End of epoch {trainer.epoch} ============")
-
-        trainer.save_periodic()
 
         logger.info("====== STARTING EVALUATION (multi-gpu: {}) =======".format(params.multi_gpu))
         stats, results_per_type = evaluator.evaluate()
@@ -201,8 +167,14 @@ def main(params: DictConfig):
                     }
             wandb.log(wandb_log)
 
-        trainer.save_best_model(stats)
-        trainer.end_epoch()
+        if params.is_master:
+            trainer.save_checkpoint("checkpoint")
+            trainer.save_best_model(stats)
+
+            if params.save_periodic > 0 and (trainer.epoch + 1) % params.save_periodic == 0:
+                trainer.save_checkpoint(f"periodic-{trainer.epoch}")
+
+        trainer.epoch += 1
 
     max_mem = torch.cuda.max_memory_allocated() / 1024**2
     logger.info("MEM: {:.2f} MB".format(max_mem))

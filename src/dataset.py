@@ -12,6 +12,7 @@ ALL_DATASETS = {
     "incom_ns_arena": ds.IncomNS2DArena,
     "incom_ns_arena_u": ds.IncomNS2DArenaU,
     "cfdbench": ds.CFDBench2D,
+    "fno": ds.FNO2D,
 }
 
 
@@ -34,7 +35,6 @@ def get_dataset(params, symbol_env, split):
         else:
             return dp.iter.SampleMultiplexer(datasets)
     else:
-
         datasets = {}
         for t in types:
             use_split = "train" if params.overfit_test else split

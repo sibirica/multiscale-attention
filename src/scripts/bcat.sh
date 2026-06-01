@@ -16,8 +16,8 @@ torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wand
 # next token prediction variant
 
 expid=bcat_next_token
-torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_id=${expid} batch_size=40 batch_size_eval=40 eval_size=50 data=fluids_arena compile=1 optim=muon model=bcat_next_token &&
-torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=eval eval_from_exp=checkpoint/bcat/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 data=fluids_arena model=bcat_next_token
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py exp_id=${expid} batch_size=40 batch_size_eval=40 eval_size=50 data=arena compile=1 optim=muon model=bcat_next_token &&
+torchrun --standalone --nnodes 1 --nproc_per_node 4 main.py eval_only=1 use_wandb=0 exp_name=eval eval_from_exp=checkpoint/bcat/${expid} log_eval_plots=-1 exp_id=${expid} batch_size_eval=64 data=arena model=bcat_next_token
 
 # Time-then-Space variant
 

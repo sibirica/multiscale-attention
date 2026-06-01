@@ -25,7 +25,6 @@ dependencies = [
     "torchmetrics",
     "rotary-embedding-torch",
     "ema-pytorch",
-    "dadaptation",
     "transformers",
     "accelerate",
     "diffusers[torch]",

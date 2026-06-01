@@ -191,7 +191,8 @@ class DataOperatorDecoder(nn.Module):
         if self.time_embed_type == "continuous":
             times = self.time_proj(times)[:, :, None]  # (bs/1, output_len, 1, dim)
         else:
-            times = self.time_embeddings[:, :output_len]  # (1, input_len, 1, dim)
+            assert output_len <= self.time_embeddings.size(1)
+            times = self.time_embeddings[:, :output_len]  # (1, output_len, 1, dim)
 
         return (times + self.patch_position_embeddings).reshape(bs, -1, self.dim)
 

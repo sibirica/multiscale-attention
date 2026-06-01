@@ -1,0 +1,18 @@
+name: diffusion2d
+
+# unet2d config
+layers_per_block: 2
+block_out_channels: [128, 256, 256, 256]
+down_block_types: ["DownBlock2D", "DownBlock2D", "DownBlock2D", "AttnDownBlock2D"]
+up_block_types: ["AttnUpBlock2D", "UpBlock2D", "UpBlock2D", "UpBlock2D"]
+
+# ddpm schedule
+scheduler:
+  num_steps: 1000
+  beta_schedule: linear
+  prediction_type: epsilon
+  variance_type: fixed_small # fixed_small, fixed_large, fixed_large_log, learned_range
+
+  reverse_type: ddim
+  ddim_num_steps: 50
+  eta: 0.0

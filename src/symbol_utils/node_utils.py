@@ -130,8 +130,9 @@ class Node:
         elif self.value == "neg":
             return -self.children[0].val(u, deterministic=deterministic, space_dim=space_dim)
         elif self.value == "mul":
-            m1, m2 = self.children[0].val(u, deterministic=deterministic, space_dim=space_dim), self.children[1].val(
-                u, deterministic=deterministic, space_dim=space_dim
+            m1, m2 = (
+                self.children[0].val(u, deterministic=deterministic, space_dim=space_dim),
+                self.children[1].val(u, deterministic=deterministic, space_dim=space_dim),
             )
             try:
                 return m1 * m2
@@ -141,8 +142,9 @@ class Node:
                 nans[:] = np.nan
                 return nans
         elif self.value == "pow":
-            m1, m2 = self.children[0].val(u, deterministic=deterministic, space_dim=space_dim), self.children[1].val(
-                u, deterministic=deterministic, space_dim=space_dim
+            m1, m2 = (
+                self.children[0].val(u, deterministic=deterministic, space_dim=space_dim),
+                self.children[1].val(u, deterministic=deterministic, space_dim=space_dim),
             )
             try:
                 return np.power(m1, m2)

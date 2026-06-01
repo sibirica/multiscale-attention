@@ -18,7 +18,6 @@ def init_distributed_mode(params):
 
     # multi-GPU job (local or multi-node) - jobs started with torch.distributed.launch
     if params.world_size > 1:
-
         # read environment variables
         params.global_rank = int(os.environ["RANK"])
         params.local_rank = int(os.environ["LOCAL_RANK"])
@@ -69,7 +68,6 @@ def init_distributed_mode(params):
 
     # initialize multi-GPU
     if params.multi_gpu:
-
         # http://pytorch.apachecn.org/en/0.3.0/distributed.html#environment-variable-initialization
         # 'env://' will read these environment variables:
         # MASTER_PORT - required; has to be a free port on machine with rank 0

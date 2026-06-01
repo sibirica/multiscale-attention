@@ -24,6 +24,7 @@ DatasetIdx = {
     "incom_ns_arena": 4,
     "incom_ns_arena_u": 5,
     "cfdbench": 6,
+    "fno": 7,
 }
 
 
@@ -512,7 +513,6 @@ class ComNS2D(myIterDp):
             data_paths = self.rng.permutation(data_paths)
 
         for data_path in data_paths:
-
             with h5py.File(data_path, "r") as hf:
                 iter_range = self.get_iter_range(len(hf["Vx"]))[self.local_rank :: self.n_gpu_per_node]
                 if self.train:
@@ -774,7 +774,6 @@ class IncomNS2DArenaU(myIterDp):
             iter_range = self.rng.permutation(iter_range)
 
         for file_idx in iter_range:
-
             data_path = os.path.join(self.folder, self.data_files[file_idx])
             with h5py.File(data_path, "r") as f:
                 hf = f[self.split_to_name[self.split]]
@@ -926,3 +925,127 @@ class CFDBench2D(myIterDp):
                     d["symbol_input"] = self.symbol_ids
 
                 yield d
+
+
+class FNO2D(myIterDp):
+    """
+    FNO 2D navier-stokes dataset.
+        size:  15000
+        t_num: 50           [0, 50] dt=1 ?
+        x_num: (64, 64)     (0, 1)
+        data_dim: 1
+        bc: periodic
+
+    Dataset structure:
+    ns_V1e-3_N5000_T50.mat
+        a: (64, 64, 5000)
+        t: (50, 1)
+        u: (50, 64, 64, 5000)
+
+    ns_V1e-4_N10000_T30.mat
+        a: (64, 64, 10000)
+        t: (50, 1)
+        u: (50, 64, 64, 10000)
+    """
+
+    def __init__(self, params, symbol_env, split="train", train=True):
+        super().__init__(params, symbol_env, split, train)
+
+        # dataset specific initialization
+
+        self.type_label = "fno"
+
+        self.t_step = params.data.fno.t_step
+        self.x_step = max(1, params.data.fno.x_num // params.data.x_num)
+        self.fully_shuffled = True  # no need to shuffle since we shuffle in __iter__
+
+        self.folder = params.data.fno.folder
+        # self.data_files = sorted([f for f in os.listdir(self.folder) if f.endswith(".mat")])
+        self.data_files = sorted([f for f in os.listdir(self.folder) if f.endswith(".mat") and "1e-4" in f])
+
+        # if self.params.symbol.symbol_input:
+        #     tree = self.symbol_env.generator.get_tree(self.type_label)
+        #     tree_encoded = self.symbol_env.equation_encoder.encode(tree)
+        #     symbol_input = self.symbol_env.word_to_idx([tree_encoded], float_input=False)[0]
+        #     self.symbol_ids = symbol_input
+
+        if not self.params.data.tie_fields:
+            self.c_mask = torch.Tensor(params.data[self.type_label].c_mask)
+            self.c_mask_bool = self.c_mask.bool()
+
+    def __iter__(self):
+        self.init_rng()
+        iter_range = np.arange(len(self.data_files))
+
+        if self.train:
+            iter_range = self.rng.permutation(iter_range)
+
+        for file_idx in iter_range:
+            data_path = os.path.join(self.folder, self.data_files[file_idx])
+
+            if self.params.symbol.symbol_input:
+                if "1e-4" in self.data_files[file_idx]:
+                    eta = 1e-4
+                elif "1e-3" in self.data_files[file_idx]:
+                    eta = 1e-3
+                else:
+                    raise ValueError(f"Unknown viscosity from file {self.data_files[file_idx]}")
+
+            with h5py.File(data_path, "r") as f:
+                # file_size = f["u"].shape[-1]
+                file_size = 1000
+                file_iter_range = self.get_iter_range(file_size)[self.local_rank :: self.n_gpu_per_node]
+
+                if self.train:
+                    file_iter_range = self.rng.permutation(file_iter_range)
+
+                for i in file_iter_range:
+                    t0 = self.sample_initial_time(f["u"].shape[0]) if self.random_start else 0
+
+                    u = f["u"][
+                        t0 : (t0 + self.t_num * self.t_step) : self.t_step, :: self.x_step, :: self.x_step, i
+                    ]  # (t_num, x_num, x_num)
+
+                    if u.shape[1] < self.params.data.x_num:
+                        data = (
+                            F.interpolate(
+                                torch.from_numpy(u).float()[None],  # (1, t_num, x_num, x_num)
+                                size=(self.params.data.x_num, self.params.data.x_num),
+                                mode="bilinear",
+                                align_corners=True,
+                            )
+                            .permute(1, 2, 3, 0)
+                            .numpy()
+                        )  # (t_num, x_num, x_num, 1)
+                    else:
+                        data = u[..., None]  # (t_num, x_num, x_num, 1)
+
+                    data = self.augment_data(data)
+                    data = torch.from_numpy(data).float()
+
+                    d = {}
+                    # d["type"] = self.type_label
+
+                    if not self.params.data.tie_fields:
+                        d["data_mask"] = self.c_mask
+                        nt, nx, ny, _ = data.size()
+                        tmp = torch.zeros(nt, nx, ny, self.params.data.max_output_dimension, dtype=data.dtype)
+                        tmp[..., self.c_mask_bool] = data
+                        data = tmp
+
+                    d["data"] = data
+
+                    if self.params.use_raw_time:
+                        t = f["t"][t0 : (t0 + self.t_num * self.t_step) : self.t_step, 0]  # (t_num, )
+                        t = torch.from_numpy(t).float()
+                        d["t"] = t
+
+                    if self.params.symbol.symbol_input:
+                        tree = self.symbol_env.generator.get_tree(self.type_label, {"eta": eta})
+                        tree_encoded = self.symbol_env.equation_encoder.encode(tree)
+                        symbol_input = self.symbol_env.word_to_idx([tree_encoded], float_input=False)[0]
+                        d["symbol_input"] = symbol_input
+
+                        # d["symbol_input"] = self.symbol_ids
+
+                    yield d

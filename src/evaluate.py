@@ -1,4 +1,3 @@
-import os
 import numpy as np
 from logging import getLogger
 from collections import defaultdict
@@ -8,7 +7,7 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
 from dataset import get_dataset
-from utils.misc import sync_tensor, to_cuda, set_worker_sharing_strategy
+from utils.misc import sync_tensor, set_worker_sharing_strategy
 from utils.metrics import compute_metrics
 from utils.plot import plot_2d_pde, plot_2d_pde_formal
 from data_utils.collate import custom_collate
@@ -51,7 +50,6 @@ def get_boundary_mask(patch_size: int, patch_num: int, boundary_width=1):
 
 
 class Evaluator(object):
-
     def __init__(self, trainer, symbol_env):
         self.trainer = trainer
         self.modules = trainer.modules
@@ -59,12 +57,6 @@ class Evaluator(object):
         self.symbol_env = symbol_env
         self.datasets: dict = get_dataset(self.params, symbol_env, split="test" if self.params.eval_only else "val")
 
-        self.collate_fn = custom_collate(
-            self.params.data.max_output_dimension,
-            self.symbol_env.pad_index,
-            self.params.data.tie_fields,
-            pad_right=self.params.symbol.pad_right,
-        )
         self.dataloaders = {
             k: DataLoader(
                 v,
@@ -102,23 +94,24 @@ class Evaluator(object):
 
     @torch.inference_mode()
     def evaluate(self):
-
         params = self.params
 
         model = self.modules["model"]
         model.eval()
+        model = model.module if hasattr(model, "module") else model
+        model.setup_cache(params.batch_size_eval, torch.bfloat16 if params.amp else torch.float32)
 
         if params.print_outputs:
-            save_folder = os.path.join(params.eval_dump_path, "figures/")
-            os.makedirs(save_folder, exist_ok=True)
+            save_folder = params.dump_path / "eval/figures"
+            save_folder.mkdir(parents=True, exist_ok=True)
 
         if params.log_eval_plots > 0:
-            plot_folder = os.path.join(params.eval_dump_path, f"epoch_{self.trainer.epoch}_{self.params.local_rank}")
-            os.makedirs(plot_folder, exist_ok=True)
+            plot_folder = params.dump_path / f"eval/epoch_{self.trainer.epoch}_{self.params.local_rank}"
+            plot_folder.mkdir(parents=True, exist_ok=True)
 
         if params.save_outputs:
-            output_folder = os.path.join(params.eval_dump_path, "outputs/")
-            os.makedirs(output_folder, exist_ok=True)
+            output_folder = params.dump_path / "eval/outputs"
+            output_folder.mkdir(parents=True, exist_ok=True)
 
         if params.eval_only or self.trainer.epoch == params.max_epoch - 1:
             # plot everything during testing and last epoch
@@ -129,12 +122,6 @@ class Evaluator(object):
 
         all_results = {}
         more_metrics = []
-        # Inference timing: cuda Events on current stream + end_event.synchronize()
-        # before elapsed_time (CUDA requires both events completed; we avoid
-        # torch.cuda.synchronize(), which drains all streams / device-wide).
-        # First ``eval_timing_warmup_batches`` batches per loader run normally but are not timed;
-        # after the last warmup batch we synchronize once so delayed compile work does not bleed
-        # into the first timed batch.
         inference_timings: dict[str, dict] = {}
 
         for type, loader in self.dataloaders.items():
@@ -143,14 +130,11 @@ class Evaluator(object):
             results = defaultdict(list)
             inference_ms_total = 0.0
             inference_samples = 0
-            timing_use_cuda = (not self.params.cpu) and torch.cuda.is_available()
-            timing_warmup = max(0, int(params.eval_timing_warmup_batches))
+            timing_use_cuda = (not params.cpu) and torch.cuda.is_available()
+            timing_warmup = max(0, int(params.get("eval_timing_warmup_batches", 1)))
             if timing_use_cuda:
                 timing_start_ev = torch.cuda.Event(enable_timing=True)
                 timing_end_ev = torch.cuda.Event(enable_timing=True)
-
-            if self.params.debug:
-                logger.info(f"Evaluating {type}")
 
             for idx, samples in enumerate(loader):
                 bs = len(samples["data"])
@@ -164,7 +148,7 @@ class Evaluator(object):
                     if "times" in model_input:
                         model_input["times"] = model_input["times"][:, :14]
 
-                if type in ["cfdbench"] and self.params.model.name.endswith("auto"):
+                if type in ["cfdbench"] and (self.params.model.name.endswith("auto") or self.params.rollout):
                     # NOTE: currently hardcoded
                     model_input["carry_over_c"] = 2
 
@@ -176,7 +160,6 @@ class Evaluator(object):
                     mode = "generate"
 
                 record_inference_timing = timing_use_cuda and idx >= timing_warmup
-
                 if record_inference_timing:
                     timing_start_ev.record()
                 with torch.amp.autocast(
@@ -240,7 +223,7 @@ class Evaluator(object):
                     output = data_output[..., : params.data[type.split(":")[0]].dim].float().numpy(force=True)
                     target = samples["data"][..., : params.data[type.split(":")[0]].dim].numpy(force=True)
                     errors = np.array(cur_result["_l2_error"])
-                    np.savez(os.path.join(output_folder, f"{type}.npz"), output=output, target=target, errors=errors)
+                    np.savez(str(output_folder / f"{type}.npz"), output=output, target=target, errors=errors)
 
                 if params.print_outputs:
                     # plot all outputs
@@ -267,7 +250,7 @@ class Evaluator(object):
                             params.input_len,
                             plot_title,
                             filename=f"{type}_plot_{index}",
-                            folder=save_folder,
+                            folder=str(save_folder),
                             dim=params.data[type.split(":")[0]].dim,
                         )
 
@@ -297,7 +280,7 @@ class Evaluator(object):
                         params.input_len,
                         plot_title,
                         filename=f"{type}_plot_{index}",
-                        folder=plot_folder,
+                        folder=str(plot_folder),
                         input_plot_len=input_plot_len,
                         output_plot_len=output_plot_len,
                         dim=params.data[type.split(":")[0]].dim,
@@ -348,11 +331,12 @@ class Evaluator(object):
                         timing_warmup,
                     )
 
+        model.clear_cache()
+
         if params.multi_gpu:
             # sync results on all gpus
             sorted_keys = None
             for type, results in all_results.items():
-
                 if sorted_keys is None:
                     sorted_keys = sorted(results.keys())
 

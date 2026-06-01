@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from .attention_utils import CustomTransformerEncoder, MultiheadAttention, get_activation, GroupNorm, FFN
+from .attention_utils import CustomTransformerEncoder, MultiheadAttention, GroupNorm, FFN
 from .embedder import get_embedder
 from einops import rearrange
 from logging import getLogger
@@ -79,7 +79,6 @@ class ST_Block(nn.Module):
         b, _, p, _, _ = src.size()
         x = src
 
-        # if self.norm_first:
         nx = self.norm1(x)
         nx = rearrange(nx, "b t h w c -> (b h w) t c")
         nx = self.dropout1(self.time_module(nx, nx, nx, is_causal=is_causal, rotary_emb=rotary_emb))
@@ -100,22 +99,6 @@ class ST_Block(nn.Module):
         x = x + nx
 
         x = x + self.ffn(self.norm3(x))
-        # else:
-        #     x = rearrange(x, "b t h w c -> (b h w) t c")
-        #     x = self.norm1(x + self.dropout1(self.time_module(x, x, x, is_causal=is_causal, rotary_emb=rotary_emb)))
-
-        #     match self.space_module_type:
-        #         case "attn":
-        #             x = rearrange(x, "(b h w) t c -> (b t) (h w) c", h=p, w=p)
-        #             x = self.norm2(x + self.dropout2(self.space_module(x, x, x, rotary_emb=rotary_emb)))
-        #             x = rearrange(x, "(b t) (h w) c -> b t h w c", b=b, h=p, w=p)
-
-        #         case "afno":
-        #             x = rearrange(x, "(b h w) t c -> (b t) h w c", h=p, w=p)
-        #             x = self.norm2(x + self.dropout2(self.space_module(x)))
-        #             x = rearrange(x, "(b t) h w c -> b t h w c", b=b)
-
-        #     x = self.norm3(x + self.ffn(x))
         return x
 
 
@@ -214,7 +197,6 @@ class ST_auto(nn.Module):
         data_output = self.embedder.decode(data_output)  # (bs, output_len, x_num, x_num, data_dim)
         return data_output
 
-    @torch.compiler.disable()
     def generate(self, data_input, times, input_len: int, data_mask, carry_over_c=-1, **kwargs):
         """
         Inputs:
