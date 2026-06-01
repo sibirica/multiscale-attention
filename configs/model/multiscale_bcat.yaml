@@ -1,0 +1,54 @@
+name: multiscale_bcat_auto
+
+# shared attributes
+n_layer: 6 # 12
+dim_emb: 448 # 640 # 1024 # fast embedding dimension
+slow_dim: ${.dim_emb}
+dim_ffn: 1152 # 1664 # 2752
+pool_dim: ${.dim_ffn} # hidden layer size of slow layer encoding ffn
+dropout: 0
+attn_dropout: 0
+n_head: 8
+norm_first: true
+positional_embedding: null
+qk_norm: 1
+norm: layer # select from [layer, rms]
+activation: swiglu
+recombine_activation: swiglu # activation function to use in RecombineDecoder FFN
+rotary: 0
+
+flex_attn: 1
+kv_cache: 1
+rate: 10 # 2
+shared_scale_ffn: 0 # if 1, fast/slow streams in each layer use the same FFN weights
+
+# Optional sliding-window restriction on the attention masks.
+# When limit_window=False, the windows are ignored and attention is pure block-causal.
+# Window sizes are counted in time-block units (including the current step for self-attention).
+limit_window: true
+attn_sink_tokens: 1       # number of always-visible key tokens reserved as attention sink
+self_window: 4            # max context in fast/slow self-attention - should it just be rate?
+fast_to_slow_window: 2    # max context for fast queries reading slow keys
+slow_to_fast_window: ${.rate}  # max context for slow queries reading fast keys
+
+log_recombine_norms: 0
+log_recombine_norms_mode: always # choose from [inference, always]
+log_once: 1
+
+patch_num: 16 #8 # for input, number of patches per dimension
+patch_num_output: ${.patch_num} # for output, number of patches per dimension
+
+embedder:
+    # choose from [linear, conv, overlap_linear]
+    type: conv
+    dim: ${..dim_emb}
+    patch_num: ${..patch_num}
+    patch_num_output: ${..patch_num_output}
+
+    time_embed: learnable # select from continuous and learnable
+    max_time_len: 50 # 100 # (switched with length of dataset, previously 20)
+
+    conv_dim: 32
+    early_conv: 0
+
+    deep: 0
