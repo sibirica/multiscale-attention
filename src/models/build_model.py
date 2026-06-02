@@ -1,6 +1,7 @@
-from logging import getLogger
 import torch
+import torch.nn as nn
 from ema_pytorch import EMA
+from logging import getLogger
 # from tabulate import tabulate
 
 
@@ -40,6 +41,17 @@ def build_model(params, model_config, data_config, symbol_env):
 
             modules["model"] = BCAT_causal(
                 model_config, data_config.x_num, data_config.max_output_dimension, data_config.t_num
+            )
+
+        case "multiscale_bcat_auto":
+            from .multiscale_bcat import MultiscaleBCAT
+
+            modules["model"] = MultiscaleBCAT(
+                model_config,
+                data_config.x_num,
+                data_config.max_output_dimension,
+                data_config.t_num,
+                eval_only=params.eval_only,
             )
 
         case "diffusion2d":
@@ -141,7 +153,8 @@ def build_model(params, model_config, data_config, symbol_env):
                 continue
 
             # modules[k] = torch.compile(v, mode="reduce-overhead")
-            if hasattr(v, "compile"):
+            has_custom_compile = type(v).compile is not nn.Module.compile
+            if has_custom_compile:
                 v.compile(params)  # custom compile
             else:
                 modules[k] = torch.compile(modules[k])

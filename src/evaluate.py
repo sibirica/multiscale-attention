@@ -26,6 +26,7 @@ metric_to_header = {
     "_l2_error_step_1": "rel l2 step 1",
     "_l2_error_step_5": "rel l2 step 5",
     "_l2_error_step_10": "rel l2 step 10",
+    "_l2_error_step_20": "rel l2 step 20",
     "_l2_error_int": "rel l2 interior",
 }
 
@@ -77,9 +78,11 @@ class Evaluator(object):
 
         self.validation_metrics = self.params.validation_metrics_print.split(",")
         self.output_len = self.params.data.t_num - self.params.input_len
-        if self.output_len < 10:
+        if self.output_len < 20 and "_l2_error_step_20" in self.validation_metrics:
+            self.validation_metrics.remove("_l2_error_step_20")
+        if self.output_len < 10 and "_l2_error_step_10" in self.validation_metrics:
             self.validation_metrics.remove("_l2_error_step_10")
-        if self.output_len < 5:
+        if self.output_len < 5 and "_l2_error_step_5" in self.validation_metrics:
             self.validation_metrics.remove("_l2_error_step_5")
 
         if "_l2_error_int" in self.validation_metrics and "patch_num" in self.params.model:
@@ -252,6 +255,7 @@ class Evaluator(object):
                             filename=f"{type}_plot_{index}",
                             folder=str(save_folder),
                             dim=params.data[type.split(":")[0]].dim,
+                            temporal_stride=max(1, int(params.get("eval_plot_temporal_stride", 1))),
                         )
 
                 if params.log_eval_plots > 0 and num_plotted < params.log_eval_plots:
@@ -284,6 +288,7 @@ class Evaluator(object):
                         input_plot_len=input_plot_len,
                         output_plot_len=output_plot_len,
                         dim=params.data[type.split(":")[0]].dim,
+                        temporal_stride=max(1, int(params.get("eval_plot_temporal_stride", 1))),
                     )
 
                     if params.use_wandb:

@@ -1,7 +1,5 @@
 """
 Autoregressive multiscale BCAT model.
-
-Note: there seems to be no actual benefit to dynamic compilation - maybe remove.
 """
 
 from logging import getLogger
@@ -345,6 +343,7 @@ class MultiscaleBCAT(nn.Module):
         self.config = config
         self.x_num = x_num
         self.max_output_dim = max_output_dim
+        self.max_data_len = max_data_len
         self.rate = config.get("rate", 1)
         self.eval_only = eval_only
         if self.rate <= 0:
@@ -424,30 +423,9 @@ class MultiscaleBCAT(nn.Module):
             config=config,
         )
         
-        # Hardware optimization: Compile the transformer kernels if using flex_attention
-        if self.flex_attn:
-            # 1. TRAINING PATH: Static shapes. PyTorch will highly optimize for your fixed training seq_len.
-            # (You can even safely add mode="max-autotune" back here if you want maximum training throughput)
-            if not self.eval_only:
-                self._compiled_transformer_fwd = torch.compile(
-                    self._transformer_flex_uncompiled
-                )
-            
-            # 2. GENERATION PATH: Dynamic shapes. Protects against recompilation storms as length grows.
-            self._compiled_transformer_gen = torch.compile(
-                self._transformer_flex_uncompiled, 
-                dynamic=True
-            )
-            
-            # KV Rollout is only used in generation, so it must be dynamic.
-            self._compiled_kv_rollout = torch.compile(
-                self.transformer.forward_rollout_kv_cache, 
-                dynamic=True
-            )
-        else:
-            self._compiled_transformer_fwd = self._transformer_flex_uncompiled
-            self._compiled_transformer_gen = self._transformer_flex_uncompiled
-            self._compiled_kv_rollout = self.transformer.forward_rollout_kv_cache
+        self._compiled_transformer_fwd = self._transformer_flex_uncompiled
+        self._compiled_transformer_gen = self._transformer_flex_uncompiled
+        self._compiled_kv_rollout = self.transformer.forward_rollout_kv_cache
 
         self.seq_len_per_step = config.embedder.patch_num**2
         self.max_fast_time = max(1, max_data_len - 1)
@@ -490,6 +468,8 @@ class MultiscaleBCAT(nn.Module):
             ),
             persistent=False,
         )
+        self.cache = None
+        self.cache_dtype = None
 
     def summary(self):
         seen: set[int] = set()
@@ -527,6 +507,18 @@ class MultiscaleBCAT(nn.Module):
             lines.append(f"\tRotary:             {n_rotary:>14,}")
         lines.append(f"\tTotal:   {n_total:>14,}")
         return "\n".join(lines)
+
+    def compile(self, params):
+        self.fwd = torch.compile(self.fwd)
+
+        if self.flex_attn and (not self.eval_only):
+            self._compiled_transformer_fwd = torch.compile(self._transformer_flex_uncompiled)
+        if self.flex_attn and params.eval_only:
+            self._compiled_transformer_gen = torch.compile(self._transformer_flex_uncompiled)
+            self._compiled_kv_rollout = torch.compile(self.transformer.forward_rollout_kv_cache)
+
+        if params.eval_only:
+            self.generate = torch.compile(self.generate)
 
     def _build_masks(
         self,
@@ -645,7 +637,27 @@ class MultiscaleBCAT(nn.Module):
         data_output = data_encoded[:, input_len - 1 :]
         return data_output
 
-    @torch.compiler.disable()
+    def setup_cache(self, max_batch_size: int, dtype):
+        if self.config.get("kv_cache", False):
+            self.cache_dtype = dtype
+            max_lf = self.max_data_len * self.seq_len_per_step
+            self.cache = KVCache(
+                2 * self.config.n_layer,
+                max_batch_size,
+                max_lf,
+                self.config.n_head,
+                self.config.dim_emb // self.config.n_head,
+                dtype=dtype,
+                device=next(self.parameters()).device,
+            )
+        else:
+            self.cache = None
+            self.cache_dtype = None
+
+    def clear_cache(self):
+        self.cache = None
+        self.cache_dtype = None
+
     def generate(self, data_input, times, input_len: int, data_mask, carry_over_c=-1, **kwargs):
         t_num = times.size(1)
         output_len = t_num - input_len
@@ -661,13 +673,29 @@ class MultiscaleBCAT(nn.Module):
         kv_cache_rollout = bool(self.config.get("kv_cache", False))
         if kv_cache_rollout:
             max_lf = t_num * self.seq_len_per_step
-            attn_cache = KVCache(
-                2 * self.config.n_layer,
-                bs,
-                max_lf,
-                self.config.n_head,
-                self.config.dim_emb // self.config.n_head,
-            )
+            cache_dtype = self.cache_dtype if self.cache_dtype is not None else data_input.dtype
+            need_new_cache = self.cache is None
+            if not need_new_cache:
+                cache_shape = self.cache.k_cache[0].shape
+                need_new_cache = (
+                    bs > cache_shape[0]
+                    or max_lf > cache_shape[2]
+                    or self.cache.k_cache[0].dtype != cache_dtype
+                    or self.cache.device != data_input.device
+                )
+            if need_new_cache:
+                self.cache = KVCache(
+                    2 * self.config.n_layer,
+                    bs,
+                    max_lf,
+                    self.config.n_head,
+                    self.config.dim_emb // self.config.n_head,
+                    dtype=cache_dtype,
+                    device=data_input.device,
+                )
+                self.cache_dtype = cache_dtype
+            self.cache.reset()
+            attn_cache = self.cache
 
         xf_accum = None
 

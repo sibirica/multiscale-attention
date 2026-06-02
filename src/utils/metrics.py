@@ -72,6 +72,15 @@ def compute_metrics(output, label, mask=None, metrics=["_mse"], batched=False):
                         predicted = output[:, :10]
                         true = label[:, :10]
 
+                elif metric == "_l2_error_step_20":
+                    if label.size(1) < 20:
+                        # give nan if the sequence is too short
+                        predicted = output[:, 19:20]
+                        true = label[:, 19:20]
+                    else:
+                        predicted = output[:, :20]
+                        true = label[:, :20]
+
                 elif metric == "_l2_error_int":
                     predicted = output * mask
                     true = label * mask
@@ -124,6 +133,15 @@ def compute_metrics(output, label, mask=None, metrics=["_mse"], batched=False):
                     else:
                         predicted = output[:10]
                         true = label[:10]
+
+                elif metric == "_l2_error_step_20":
+                    if label.size(0) < 20:
+                        # give nan if the sequence is too short
+                        predicted = output[19:20]
+                        true = label[19:20]
+                    else:
+                        predicted = output[:20]
+                        true = label[:20]
 
                 elif metric == "_l2_error_int":
                     predicted = output * mask

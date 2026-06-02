@@ -72,13 +72,15 @@ eval_timing_warmup_batches: 1 # CUDA eval: skip timing for first N dataloader ba
 print_outputs: 0 # Print/graph all outputs
 save_outputs: 0 # save all outputs
 log_eval_plots: 4 # Log evaluation plots for each epoch, each type (-1 to disable)
+eval_plot_temporal_stride: 5 # Temporal stride for eval plots (e.g. 5 plots 0,5,10,...)
 
 validation_metrics: _l2_error # Metrics for early stopping/model selection
 
-# Metrics to report (select from _mse, _rmse, _l2_error, _l2_error_first_half, _l2_error_second_half, _l2_error_step_1, _l2_error_step_5, _l2_error_int)
-validation_metrics_print: _l2_error,_l2_error_step_1,_l2_error_step_5,_l2_error_step_10,_l2_error_int
+# Metrics to report (select from _mse, _rmse, _l2_error, _l2_error_first_half, _l2_error_second_half, _l2_error_step_1, _l2_error_step_5, _l2_error_step_10, _l2_error_step_20, _l2_error_int)
+validation_metrics_print: _l2_error,_l2_error_step_1,_l2_error_step_5,_l2_error_step_10,_l2_error_step_20,_l2_error_int
 
 reload_model: null # Reload a pretrained model (model weights only, for evaluation/finetuning)
+eval_from_exp: null # Evaluation source (experiment dir or checkpoint file); used when eval_only=1 and reload_model is null
 reload_checkpoint: null # Reload a checkpoint (model weights, optimizer states, etc. to resume training)
 
 overfit_test: 0
@@ -102,7 +104,7 @@ symbol:
   max_output_dimension: 5
 
 ### experiment & logging names
-exp_name: bcat
+exp_name: multiscale
 exp_id: null
 
 use_wandb: 1

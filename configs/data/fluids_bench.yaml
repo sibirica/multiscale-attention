@@ -11,7 +11,7 @@ random_start: # randomly select the time starting idx
   train: true
   val: false
   test: false
-  start_max: 90
+  start_max: 40
 
 # whether to share all channels among equations or use c_mask
 tie_fields: 1

@@ -29,6 +29,7 @@ def plot_2d_pde(
     input_plot_len=-1,
     output_plot_len=-1,
     dim=-1,
+    temporal_stride=1,
 ):
     """
     output:     (output_len, x_num, x_num, data_dim)
@@ -44,8 +45,12 @@ def plot_2d_pde(
         input_plot_len = input_len
     if output_plot_len < 0:
         output_plot_len = output_len
+    temporal_stride = max(1, int(temporal_stride))
+    output_indices = list(range(output_len - output_plot_len, output_len, temporal_stride))
+    if (output_len - 1) not in output_indices:
+        output_indices.append(output_len - 1)
 
-    total_col = input_plot_len + output_plot_len * 3
+    total_col = input_plot_len + len(output_indices) * 3
     fig, axs = plt.subplots(dim, total_col, squeeze=False, figsize=(4.3 * total_col, 4 * dim))
 
     for input_step in range(input_plot_len):
@@ -54,7 +59,7 @@ def plot_2d_pde(
                 axs[j, input_step], data_all[input_step, ..., j], f"input, step {input_step}, t={times[input_step]:.2f}"
             )
 
-    for idx, output_step in enumerate(range(output_len - output_plot_len, output_len)):
+    for idx, output_step in enumerate(output_indices):
         step = input_len + output_step
         for j in range(dim):
             cur_idx = input_plot_len + idx * 3
@@ -165,6 +170,7 @@ def plot_2d_pde_formal(
     input_plot_len=-1,
     output_plot_len=-1,
     dim=-1,
+    temporal_stride=1,
 ):
     """
     output:     (output_len, x_num, x_num, data_dim)
@@ -178,12 +184,16 @@ def plot_2d_pde_formal(
 
     if output_plot_len < 0:
         output_plot_len = output_len
+    temporal_stride = max(1, int(temporal_stride))
+    output_indices = list(range(output_len - output_plot_len, output_len, temporal_stride))
+    if (output_len - 1) not in output_indices:
+        output_indices.append(output_len - 1)
 
-    total_col = output_plot_len
+    total_col = len(output_indices)
     total_row = dim * 3
     fig, axs = plt.subplots(total_row, total_col, squeeze=False, figsize=(4.3 * total_col, 4 * total_row))
 
-    for idx, output_step in enumerate(range(output_len - output_plot_len, output_len)):
+    for idx, output_step in enumerate(output_indices):
         step = input_len + output_step
         for j in range(dim):
             cur_target = data_all[step, ..., j]

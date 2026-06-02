@@ -4,7 +4,7 @@ Autoregressive BCAT model.
 
 from logging import getLogger
 from functools import partial
-from typing import Callable
+from typing import Callable, Optional
 
 import torch
 import torch.nn as nn
@@ -29,11 +29,26 @@ def block_lower_triangular_mask(block_size: int, block_num: int, use_float: bool
     """
     Create a block lower triangular boolean mask. (upper right part will be 1s, and represent locations to ignore.)
     """
+    return block_lower_triangular_window_mask(block_size, block_num, use_float=use_float)
+
+
+def block_lower_triangular_window_mask(
+    block_size: int,
+    block_num: int,
+    use_float: bool = False,
+    window: Optional[int] = None,
+    sink_tokens: int = 0,
+):
     matrix_size = block_size * block_num
-    lower_tri_mask = torch.tril(torch.ones(matrix_size, matrix_size, dtype=torch.bool))
+    time_mask = torch.tril(torch.ones(block_num, block_num, dtype=torch.bool))
+    if window is not None:
+        idx = torch.arange(block_num)
+        within = (idx[:, None] - idx[None, :]) < window
+        time_mask = time_mask & within
     block = torch.ones(block_size, block_size, dtype=torch.bool)
-    blocks = torch.block_diag(*[block for _ in range(block_num)])
-    final_mask = torch.logical_or(lower_tri_mask, blocks)
+    final_mask = torch.kron(time_mask, block)
+    if sink_tokens > 0:
+        final_mask[:, : min(sink_tokens, matrix_size)] = True
 
     if use_float:
         return torch.zeros_like(final_mask, dtype=torch.float32).masked_fill_(~final_mask, float("-inf"))
@@ -43,6 +58,49 @@ def block_lower_triangular_mask(block_size: int, block_num: int, use_float: bool
 
 def block_causal(b, h, q_idx, kv_idx, block_size):
     return (q_idx // block_size) >= (kv_idx // block_size)
+
+
+def block_causal_window(
+    b,
+    h,
+    q_idx,
+    kv_idx,
+    *,
+    block_size: int,
+    window: int,
+    sink_tokens: int = 0,
+):
+    q_t = q_idx // block_size
+    k_t = kv_idx // block_size
+    sink_ok = kv_idx < sink_tokens
+    return sink_ok | ((q_t >= k_t) & ((q_t - k_t) < window))
+
+
+def block_causal_with_kv_limit_shifted(
+    b,
+    h,
+    q_idx,
+    kv_idx,
+    *,
+    q_shift: int,
+    kv_len: int,
+    block_size: int,
+    window: Optional[int] = None,
+    sink_tokens: int = 0,
+):
+    if kv_idx >= kv_len:
+        return False
+    if window is None:
+        return (kv_idx < sink_tokens) | block_causal(b, h, q_idx + q_shift, kv_idx, block_size)
+    return block_causal_window(
+        b,
+        h,
+        q_idx + q_shift,
+        kv_idx,
+        block_size=block_size,
+        window=window,
+        sink_tokens=sink_tokens,
+    )
 
 
 class BCAT(nn.Module):
@@ -58,6 +116,15 @@ class BCAT(nn.Module):
 
         self.embedder = get_embedder(config.embedder, x_num, max_output_dim)
         self.flex_attn = config.get("flex_attn", False)
+        if config.get("limit_window", False):
+            self._self_window = int(config.get("self_window", 4))
+            if self._self_window <= 0:
+                raise ValueError(f"self_window must be positive, got {self._self_window}")
+        else:
+            self._self_window = None
+        self._attn_sink_tokens = int(config.get("attn_sink_tokens", 0))
+        if self._attn_sink_tokens < 0:
+            raise ValueError(f"attn_sink_tokens must be >= 0, got {self._attn_sink_tokens}")
 
         match config.get("norm", "layer"):
             case "rms":
@@ -99,7 +166,13 @@ class BCAT(nn.Module):
             )
 
         self.seq_len_per_step = config.embedder.patch_num**2
-        mask = block_lower_triangular_mask(self.seq_len_per_step, max_data_len, use_float=True)
+        mask = block_lower_triangular_window_mask(
+            self.seq_len_per_step,
+            max_data_len,
+            use_float=True,
+            window=self._self_window,
+            sink_tokens=self._attn_sink_tokens,
+        )
         self.register_buffer("mask", mask, persistent=False)
 
         self.return_full_cache = False
@@ -107,11 +180,22 @@ class BCAT(nn.Module):
         if self.flex_attn:
             block_size = config.patch_num**2
             seq_len = block_size * (max_data_len - 1)
-            self.block_mask = create_block_mask(
-                partial(block_causal, block_size=block_size), None, None, seq_len, seq_len
-            )
             self.block_size = block_size
+            self.block_mask = self._create_causal_block_mask(seq_len, seq_len)
             self.block_mask_prefil = None
+
+    def _block_causal_fn(self):
+        if self._self_window is None:
+            return partial(block_causal, block_size=self.block_size)
+        return partial(
+            block_causal_window,
+            block_size=self.block_size,
+            window=self._self_window,
+            sink_tokens=self._attn_sink_tokens,
+        )
+
+    def _create_causal_block_mask(self, q_len: int, kv_len: int):
+        return create_block_mask(self._block_causal_fn(), None, None, q_len, kv_len)
 
     def summary(self):
         s = "\n"
@@ -168,7 +252,7 @@ class BCAT(nn.Module):
         """
         data_len = data.size(1)
         if self.flex_attn:
-            block_mask = self.block_mask
+            block_mask = self._create_causal_block_mask(data_len, data_len)
             data_encoded = self.transformer(data, block_mask=block_mask)  # (bs, data_len, dim)
         else:
             mask = self.mask[:data_len, :data_len]
@@ -206,38 +290,52 @@ class BCAT(nn.Module):
         if not self.config.kv_cache:
             # regular full square mask
             if self.flex_attn:
-                block_mask = create_block_mask(
-                    partial(block_causal, block_size=self.block_size), None, None, kv_len, kv_len
-                )
+                block_mask = self._create_causal_block_mask(kv_len, kv_len)
             else:
                 mask = self.mask[:kv_len, :kv_len]
         elif step == 0:
             # first step prefill mask
             if self.return_full_cache:
                 if self.flex_attn:
-
-                    def block_causal2(b, h, q_idx, kv_idx):
-                        return ((q_idx // self.block_size) >= (kv_idx // self.block_size)) & (kv_idx < kv_len)
-
-                    block_mask = create_block_mask(block_causal2, None, None, kv_len, self.mask.size(0))
+                    block_mask = create_block_mask(
+                        partial(
+                            block_causal_with_kv_limit_shifted,
+                            q_shift=0,
+                            kv_len=kv_len,
+                            block_size=self.block_size,
+                            window=self._self_window,
+                            sink_tokens=self._attn_sink_tokens,
+                        ),
+                        None,
+                        None,
+                        kv_len,
+                        self.mask.size(0),
+                    )
                 else:
                     mask = self.mask[:kv_len]
             else:
                 if self.flex_attn:
-                    block_mask = create_block_mask(
-                        partial(block_causal, block_size=self.block_size), None, None, kv_len, kv_len
-                    )
+                    block_mask = self._create_causal_block_mask(kv_len, kv_len)
                 else:
                     mask = self.mask[:kv_len, :kv_len]
         else:
             # decode mask for kv cache
             if self.return_full_cache:
                 if self.flex_attn:
-
-                    def block_mask3(b, h, q_idx, kv_idx):
-                        return kv_idx < kv_len
-
-                    block_mask = create_block_mask(block_mask3, None, None, self.seq_len_per_step, self.mask.size(0))
+                    block_mask = create_block_mask(
+                        partial(
+                            block_causal_with_kv_limit_shifted,
+                            q_shift=kv_len - self.seq_len_per_step,
+                            kv_len=kv_len,
+                            block_size=self.block_size,
+                            window=self._self_window,
+                            sink_tokens=self._attn_sink_tokens,
+                        ),
+                        None,
+                        None,
+                        self.seq_len_per_step,
+                        self.mask.size(0),
+                    )
                 else:
                     mask = self.mask[(kv_len - self.seq_len_per_step) : kv_len]
 
