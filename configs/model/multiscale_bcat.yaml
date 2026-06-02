@@ -27,8 +27,8 @@ shared_scale_ffn: 0 # if 1, fast/slow streams in each layer use the same FFN wei
 # Window sizes are counted in time-block units (including the current step for self-attention).
 limit_window: true
 attn_sink_tokens: 1       # number of always-visible key tokens reserved as attention sink
-self_window: 4            # max context in fast/slow self-attention - should it just be rate?
-fast_to_slow_window: 2    # max context for fast queries reading slow keys
+self_window: 8 #4            # max context in fast/slow self-attention - should it just be rate?
+fast_to_slow_window: 4 #2    # max context for fast queries reading slow keys
 slow_to_fast_window: ${.rate}  # max context for slow queries reading fast keys
 
 log_recombine_norms: 0

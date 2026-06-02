@@ -23,13 +23,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 try:
     import torch
 except ImportError as exc:
-    raise SystemExit(
-        "test_window_mask_dense_vs_block requires PyTorch; install torch to run this test."
-    ) from exc
+    raise SystemExit("test_window_mask_dense_vs_block requires PyTorch; install torch to run this test.") from exc
 
 from models.multiscale_bcat import (
     _block_fast_to_slow,
-    _block_self,
+    _block_self_window,
     _block_slow_to_fast,
     build_fast_to_slow_mask,
     build_self_attn_mask,
@@ -68,12 +66,7 @@ class TestWindowMaskDenseVsBlock(unittest.TestCase):
                     for kj in range(Lk):
                         q = torch.tensor(qi, device=device)
                         kk = torch.tensor(kj, device=device)
-                        ww = 0 if window is None else int(window)
-                        bval = bool(
-                            _block_fast_to_slow(0, 0, q, kk, spat, rate, window=ww)
-                            .reshape(())
-                            .item()
-                        )
+                        bval = bool(_block_fast_to_slow(0, 0, q, kk, spat, rate, window=window).reshape(()).item())
 
                         self.assertEqual(
                             da[qi, kj].item(),
@@ -109,12 +102,7 @@ class TestWindowMaskDenseVsBlock(unittest.TestCase):
                     for kj in range(Lk):
                         q = torch.tensor(qi, device=device)
                         kk = torch.tensor(kj, device=device)
-                        ww = 0 if window is None else int(window)
-                        bval = bool(
-                            _block_slow_to_fast(0, 0, q, kk, spat, rate, window=ww)
-                            .reshape(())
-                            .item()
-                        )
+                        bval = bool(_block_slow_to_fast(0, 0, q, kk, spat, rate, window=window).reshape(()).item())
 
                         self.assertEqual(
                             da[qi, kj].item(),
@@ -143,9 +131,7 @@ class TestWindowMaskDenseVsBlock(unittest.TestCase):
                         for kj in range(L):
                             q = torch.tensor(qi, device=device)
                             kk = torch.tensor(kj, device=device)
-                            bval = bool(
-                                _block_self(0, 0, q, kk, spat, window).reshape(()).item()
-                            )
+                            bval = bool(_block_self_window(0, 0, q, kk, spat, window).reshape(()).item())
 
                             self.assertEqual(
                                 da[qi, kj].item(),

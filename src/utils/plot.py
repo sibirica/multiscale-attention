@@ -47,8 +47,8 @@ def plot_2d_pde(
         output_plot_len = output_len
     temporal_stride = max(1, int(temporal_stride))
     output_indices = list(range(output_len - output_plot_len, output_len, temporal_stride))
-    if (output_len - 1) not in output_indices:
-        output_indices.append(output_len - 1)
+    # if (output_len - 1) not in output_indices:
+    #     output_indices.append(output_len - 1)
 
     total_col = input_plot_len + len(output_indices) * 3
     fig, axs = plt.subplots(dim, total_col, squeeze=False, figsize=(4.3 * total_col, 4 * dim))

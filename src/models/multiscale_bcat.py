@@ -24,6 +24,7 @@ from .multiscale_utils import (
 )
 from .kv_cache import KVCache
 
+
 def build_self_attn_mask(
     time_len: int,
     spatial_tokens: int,
@@ -38,9 +39,7 @@ def build_self_attn_mask(
         if window is None:
             mask_fn = partial(block_causal, block_size=spatial_tokens)
         else:
-            mask_fn = partial(
-                _block_self_window, block_size=spatial_tokens, window=window, sink_tokens=sink_tokens
-            )
+            mask_fn = partial(_block_self_window, block_size=spatial_tokens, window=window, sink_tokens=sink_tokens)
         return create_block_mask(mask_fn, None, None, q_len, q_len, device=device)
     if dtype is None:
         dtype = torch.get_default_dtype()
@@ -150,6 +149,7 @@ def build_fast_to_slow_block_mask_incremental(
     device: torch.device,
     window: Optional[int] = None,
     sink_tokens: int = 0,
+    kv_len: Optional[int] = None,
 ):
     q_shift = lf_total - nf_query
     mask_fn = partial(
@@ -160,7 +160,8 @@ def build_fast_to_slow_block_mask_incremental(
         window=window,
         sink_tokens=sink_tokens,
     )
-    kv_len = slow_time * spatial_tokens
+    if kv_len is None:
+        kv_len = slow_time * spatial_tokens
     return create_block_mask(mask_fn, None, None, nf_query, kv_len, device=device)
 
 
@@ -172,6 +173,7 @@ def build_fast_self_block_mask_incremental(
     device: torch.device,
     window: Optional[int] = None,
     sink_tokens: int = 0,
+    kv_len: Optional[int] = None,
 ):
     q_shift = lf_total - nf_query
     mask_fn = partial(
@@ -181,16 +183,55 @@ def build_fast_self_block_mask_incremental(
         window=window,
         sink_tokens=sink_tokens,
     )
-    return create_block_mask(mask_fn, None, None, nf_query, lf_total, device=device)
+    if kv_len is None:
+        kv_len = lf_total
+    return create_block_mask(mask_fn, None, None, nf_query, kv_len, device=device)
+
+
+def build_slow_to_fast_block_mask_incremental(
+    *,
+    slow_total: int,
+    ns_query: int,
+    fast_kv_len: int,
+    rate: int,
+    spatial_tokens: int,
+    device: torch.device,
+    window: Optional[int] = None,
+    sink_tokens: int = 0,
+):
+    q_shift = slow_total - ns_query
+    mask_fn = partial(
+        _block_slow_to_fast_shifted,
+        q_shift=q_shift,
+        block_size=spatial_tokens,
+        rate=rate,
+        window=window,
+        sink_tokens=sink_tokens,
+    )
+    return create_block_mask(mask_fn, None, None, ns_query, fast_kv_len, device=device)
 
 
 def _dense_mask_from_allow(allow: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
     return torch.zeros_like(allow, dtype=dtype).masked_fill(~allow, float("-inf"))
 
 
-def _block_self_window(
-    b, h, q_idx, kv_idx, block_size: int, window: int, sink_tokens: int = 0
-) -> torch.Tensor:
+def _pad_mask_columns(mask: torch.Tensor, width: int) -> torch.Tensor:
+    # KVCache uses one max sequence length for all attention slots. Slow-stream masks
+    # therefore need extra all-masked columns when full-cache mode returns K/V tensors
+    # with fast-stream width.
+    if mask.size(1) >= width:
+        return mask[:, :width]
+    padded = torch.full(
+        (mask.size(0), width),
+        float("-inf"),
+        dtype=mask.dtype,
+        device=mask.device,
+    )
+    padded[:, : mask.size(1)] = mask
+    return padded
+
+
+def _block_self_window(b, h, q_idx, kv_idx, block_size: int, window: int, sink_tokens: int = 0) -> torch.Tensor:
     q_t = q_idx // block_size
     k_t = kv_idx // block_size
     sink_ok = kv_idx < sink_tokens
@@ -268,12 +309,28 @@ def _block_fast_to_slow_shifted(
     return _block_fast_to_slow(b, h, q_idx + q_shift, kv_idx, block_size, rate, window, sink_tokens)
 
 
+def _block_slow_to_fast_shifted(
+    b,
+    h,
+    q_idx,
+    kv_idx,
+    *,
+    q_shift: int,
+    block_size: int,
+    rate: int,
+    window: Optional[int] = None,
+    sink_tokens: int = 0,
+) -> torch.Tensor:
+    return _block_slow_to_fast(b, h, q_idx + q_shift, kv_idx, block_size, rate, window, sink_tokens)
+
+
 # -----------------------------------------------------------------------------
 # LRU caches for flex BlockMask tuples
 # -----------------------------------------------------------------------------
 
 _FLEX_BLOCK_MASK_CACHE_MAX = 64
 _INCREMENTAL_MASK_CACHE_MAX = 4096
+
 
 @lru_cache(maxsize=_FLEX_BLOCK_MASK_CACHE_MAX)
 def _cached_flex_four_block_masks(
@@ -289,50 +346,43 @@ def _cached_flex_four_block_masks(
 ) -> tuple:
     device = torch.device(device_str)
     fast_self_mask = build_self_attn_mask(
-        fast_time, spatial_tokens, device=device, use_block_mask=True, window=self_window, sink_tokens=sink_tokens,
+        fast_time,
+        spatial_tokens,
+        device=device,
+        use_block_mask=True,
+        window=self_window,
+        sink_tokens=sink_tokens,
     )
     slow_self_mask = build_self_attn_mask(
-        slow_time, spatial_tokens, device=device, use_block_mask=True, window=self_window, sink_tokens=sink_tokens,
+        slow_time,
+        spatial_tokens,
+        device=device,
+        use_block_mask=True,
+        window=self_window,
+        sink_tokens=sink_tokens,
     )
     fast_to_slow_mask = build_fast_to_slow_mask(
-        fast_time, slow_time, rate, spatial_tokens, device=device,
-        use_block_mask=True, window=fast_to_slow_window, sink_tokens=sink_tokens,
+        fast_time,
+        slow_time,
+        rate,
+        spatial_tokens,
+        device=device,
+        use_block_mask=True,
+        window=fast_to_slow_window,
+        sink_tokens=sink_tokens,
     )
     slow_to_fast_mask = build_slow_to_fast_mask(
-        fast_time, slow_time, rate, spatial_tokens, device=device,
-        use_block_mask=True, window=slow_to_fast_window, sink_tokens=sink_tokens,
+        fast_time,
+        slow_time,
+        rate,
+        spatial_tokens,
+        device=device,
+        use_block_mask=True,
+        window=slow_to_fast_window,
+        sink_tokens=sink_tokens,
     )
     return (fast_self_mask, slow_self_mask, fast_to_slow_mask, slow_to_fast_mask)
 
-@lru_cache(maxsize=_INCREMENTAL_MASK_CACHE_MAX)
-def _cached_fast_self_block_mask_incremental(
-    lf_total: int,
-    nf_query: int,
-    spatial_tokens: int,
-    device_str: str,
-    window: Optional[int],
-    sink_tokens: int,
-):
-    return build_fast_self_block_mask_incremental(
-        lf_total=lf_total, nf_query=nf_query, spatial_tokens=spatial_tokens,
-        device=torch.device(device_str), window=window, sink_tokens=sink_tokens
-    )
-
-@lru_cache(maxsize=_INCREMENTAL_MASK_CACHE_MAX)
-def _cached_fast_to_slow_block_mask_incremental(
-    lf_total: int,
-    nf_query: int,
-    slow_time: int,
-    rate: int,
-    spatial_tokens: int,
-    device_str: str,
-    window: Optional[int],
-    sink_tokens: int,
-):
-    return build_fast_to_slow_block_mask_incremental(
-        lf_total=lf_total, nf_query=nf_query, slow_time=slow_time, rate=rate,
-        spatial_tokens=spatial_tokens, device=torch.device(device_str), window=window, sink_tokens=sink_tokens
-    )
 
 logger = getLogger()
 
@@ -422,10 +472,11 @@ class MultiscaleBCAT(nn.Module):
             decoder=decoder,
             config=config,
         )
-        
+
         self._compiled_transformer_fwd = self._transformer_flex_uncompiled
         self._compiled_transformer_gen = self._transformer_flex_uncompiled
         self._compiled_kv_rollout = self.transformer.forward_rollout_kv_cache
+        self.return_full_cache = False
 
         self.seq_len_per_step = config.embedder.patch_num**2
         self.max_fast_time = max(1, max_data_len - 1)
@@ -433,23 +484,34 @@ class MultiscaleBCAT(nn.Module):
         self.register_buffer(
             "fast_self_mask_full",
             build_self_attn_mask(
-                self.max_fast_time, self.seq_len_per_step, device=torch.device("cpu"),
-                use_block_mask=False, window=self._self_window, sink_tokens=self._attn_sink_tokens,
+                self.max_fast_time,
+                self.seq_len_per_step,
+                device=torch.device("cpu"),
+                use_block_mask=False,
+                window=self._self_window,
+                sink_tokens=self._attn_sink_tokens,
             ),
             persistent=False,
         )
         self.register_buffer(
             "slow_self_mask_full",
             build_self_attn_mask(
-                self.max_slow_time, self.seq_len_per_step, device=torch.device("cpu"),
-                use_block_mask=False, window=self._self_window, sink_tokens=self._attn_sink_tokens,
+                self.max_slow_time,
+                self.seq_len_per_step,
+                device=torch.device("cpu"),
+                use_block_mask=False,
+                window=self._self_window,
+                sink_tokens=self._attn_sink_tokens,
             ),
             persistent=False,
         )
         self.register_buffer(
             "fast_to_slow_mask_full",
             build_fast_to_slow_mask(
-                self.max_fast_time, self.max_slow_time, self.rate, self.seq_len_per_step,
+                self.max_fast_time,
+                self.max_slow_time,
+                self.rate,
+                self.seq_len_per_step,
                 device=torch.device("cpu"),
                 use_block_mask=False,
                 window=self._fast_to_slow_window,
@@ -460,7 +522,10 @@ class MultiscaleBCAT(nn.Module):
         self.register_buffer(
             "slow_to_fast_mask_full",
             build_slow_to_fast_mask(
-                self.max_fast_time, self.max_slow_time, self.rate, self.seq_len_per_step,
+                self.max_fast_time,
+                self.max_slow_time,
+                self.rate,
+                self.seq_len_per_step,
                 device=torch.device("cpu"),
                 use_block_mask=False,
                 window=self._slow_to_fast_window,
@@ -486,16 +551,8 @@ class MultiscaleBCAT(nn.Module):
         n_embedder = _count(self.embedder)
         n_pool = _count(self.transformer.split_encoder.pool_ffn)
         n_layers = _count(self.transformer.layers)
-        n_decoder = (
-            _count(self.transformer.decoder)
-            if self.transformer.decoder is not None
-            else 0
-        )
-        n_rotary = (
-            _count(self.transformer.rotary_emb)
-            if self.transformer.rotary_emb is not None
-            else 0
-        )
+        n_decoder = _count(self.transformer.decoder) if self.transformer.decoder is not None else 0
+        n_rotary = _count(self.transformer.rotary_emb) if self.transformer.rotary_emb is not None else 0
         n_total = n_embedder + n_pool + n_layers + n_decoder + n_rotary
 
         lines = ["\n", f"\tEmbedder (shared):  {n_embedder:>14,}"]
@@ -518,6 +575,7 @@ class MultiscaleBCAT(nn.Module):
             self._compiled_kv_rollout = torch.compile(self.transformer.forward_rollout_kv_cache)
 
         if params.eval_only:
+            self.return_full_cache = True
             self.generate = torch.compile(self.generate)
 
     def _build_masks(
@@ -528,14 +586,16 @@ class MultiscaleBCAT(nn.Module):
         dtype: torch.dtype,
     ) -> dict:
         if self.flex_attn:
-            fast_self_mask, slow_self_mask, fast_to_slow_mask, slow_to_fast_mask = (
-                _cached_flex_four_block_masks(
-                    fast_time, slow_time, str(device), self.seq_len_per_step, self.rate,
-                    self._self_window,
-                    self._fast_to_slow_window,
-                    self._slow_to_fast_window,
-                    self._attn_sink_tokens,
-                )
+            fast_self_mask, slow_self_mask, fast_to_slow_mask, slow_to_fast_mask = _cached_flex_four_block_masks(
+                fast_time,
+                slow_time,
+                str(device),
+                self.seq_len_per_step,
+                self.rate,
+                self._self_window,
+                self._fast_to_slow_window,
+                self._slow_to_fast_window,
+                self._attn_sink_tokens,
             )
             return {
                 "fast_self_attn_mask": None,
@@ -553,12 +613,146 @@ class MultiscaleBCAT(nn.Module):
         return {
             "fast_self_attn_mask": self.fast_self_mask_full[:fast_len, :fast_len].to(dtype=dtype, device=device),
             "slow_self_attn_mask": self.slow_self_mask_full[:slow_len, :slow_len].to(dtype=dtype, device=device),
-            "fast_to_slow_attn_mask": self.fast_to_slow_mask_full[:fast_len, :slow_len].to(
-                dtype=dtype, device=device
-            ),
-            "slow_to_fast_attn_mask": self.slow_to_fast_mask_full[:slow_len, :fast_len].to(
-                dtype=dtype, device=device
-            ),
+            "fast_to_slow_attn_mask": self.fast_to_slow_mask_full[:fast_len, :slow_len].to(dtype=dtype, device=device),
+            "slow_to_fast_attn_mask": self.slow_to_fast_mask_full[:slow_len, :fast_len].to(dtype=dtype, device=device),
+            "fast_block_mask": None,
+            "slow_block_mask": None,
+            "fast_to_slow_block_mask": None,
+            "slow_to_fast_block_mask": None,
+        }
+
+    def _build_generation_masks(
+        self,
+        t_num: int,
+        input_len: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> dict:
+        max_fast_time = max(1, t_num)
+        max_slow_time = max(1, max_fast_time // self.rate)
+        max_fast_len = max_fast_time * self.seq_len_per_step
+
+        if self.flex_attn:
+            step_masks = []
+            prev_fast_time = 0
+            prev_slow_tokens = 0
+            for cur_len in range(input_len, t_num):
+                total_fast_tokens = cur_len * self.seq_len_per_step
+                incremental_fast_tokens = (cur_len - prev_fast_time) * self.seq_len_per_step
+                total_slow_tokens = (cur_len // self.rate) * self.seq_len_per_step
+                incremental_slow_tokens = total_slow_tokens - prev_slow_tokens
+                fast_kv_len = max_fast_len if self.return_full_cache else total_fast_tokens
+                slow_kv_len = max_fast_len if self.return_full_cache else total_slow_tokens
+
+                fast_block_mask = build_fast_self_block_mask_incremental(
+                    lf_total=total_fast_tokens,
+                    nf_query=incremental_fast_tokens,
+                    spatial_tokens=self.seq_len_per_step,
+                    device=device,
+                    window=self._self_window,
+                    sink_tokens=self._attn_sink_tokens,
+                    kv_len=fast_kv_len,
+                )
+                fast_to_slow_block_mask = None
+                if total_slow_tokens > 0:
+                    fast_to_slow_block_mask = build_fast_to_slow_block_mask_incremental(
+                        lf_total=total_fast_tokens,
+                        nf_query=incremental_fast_tokens,
+                        slow_time=max_slow_time if self.return_full_cache else total_slow_tokens // self.seq_len_per_step,
+                        rate=self.rate,
+                        spatial_tokens=self.seq_len_per_step,
+                        device=device,
+                        window=self._fast_to_slow_window,
+                        sink_tokens=self._attn_sink_tokens,
+                        kv_len=slow_kv_len,
+                    )
+
+                slow_block_mask = None
+                slow_to_fast_block_mask = None
+                if incremental_slow_tokens > 0:
+                    slow_block_mask = build_fast_self_block_mask_incremental(
+                        lf_total=total_slow_tokens,
+                        nf_query=incremental_slow_tokens,
+                        spatial_tokens=self.seq_len_per_step,
+                        device=device,
+                        window=self._self_window,
+                        sink_tokens=self._attn_sink_tokens,
+                        kv_len=slow_kv_len,
+                    )
+                    slow_to_fast_block_mask = build_slow_to_fast_block_mask_incremental(
+                        slow_total=total_slow_tokens,
+                        ns_query=incremental_slow_tokens,
+                        fast_kv_len=fast_kv_len,
+                        rate=self.rate,
+                        spatial_tokens=self.seq_len_per_step,
+                        device=device,
+                        window=self._slow_to_fast_window,
+                        sink_tokens=self._attn_sink_tokens,
+                    )
+
+                step_masks.append(
+                    {
+                        "fast_self_attn_mask": None,
+                        "slow_self_attn_mask": None,
+                        "fast_to_slow_attn_mask": None,
+                        "slow_to_fast_attn_mask": None,
+                        "fast_block_mask": fast_block_mask,
+                        "slow_block_mask": slow_block_mask,
+                        "fast_to_slow_block_mask": fast_to_slow_block_mask,
+                        "slow_to_fast_block_mask": slow_to_fast_block_mask,
+                    }
+                )
+                prev_fast_time = cur_len
+                prev_slow_tokens = total_slow_tokens
+
+            return {"step_masks": tuple(step_masks)}
+
+        fast_self_mask = build_self_attn_mask(
+            max_fast_time,
+            self.seq_len_per_step,
+            device=device,
+            dtype=dtype,
+            use_block_mask=False,
+            window=self._self_window,
+            sink_tokens=self._attn_sink_tokens,
+        )
+        slow_self_mask = build_self_attn_mask(
+            max_slow_time,
+            self.seq_len_per_step,
+            device=device,
+            dtype=dtype,
+            use_block_mask=False,
+            window=self._self_window,
+            sink_tokens=self._attn_sink_tokens,
+        )
+        fast_to_slow_mask = build_fast_to_slow_mask(
+            max_fast_time,
+            max_slow_time,
+            self.rate,
+            self.seq_len_per_step,
+            device=device,
+            dtype=dtype,
+            use_block_mask=False,
+            window=self._fast_to_slow_window,
+            sink_tokens=self._attn_sink_tokens,
+        )
+        slow_to_fast_mask = build_slow_to_fast_mask(
+            max_fast_time,
+            max_slow_time,
+            self.rate,
+            self.seq_len_per_step,
+            device=device,
+            dtype=dtype,
+            use_block_mask=False,
+            window=self._slow_to_fast_window,
+            sink_tokens=self._attn_sink_tokens,
+        )
+
+        return {
+            "fast_self_attn_mask": fast_self_mask,
+            "slow_self_attn_mask": _pad_mask_columns(slow_self_mask, max_fast_len),
+            "fast_to_slow_attn_mask": _pad_mask_columns(fast_to_slow_mask, max_fast_len),
+            "slow_to_fast_attn_mask": slow_to_fast_mask,
             "fast_block_mask": None,
             "slow_block_mask": None,
             "fast_to_slow_block_mask": None,
@@ -594,8 +788,9 @@ class MultiscaleBCAT(nn.Module):
         cur_data_input: torch.Tensor,
         times_prefix: torch.Tensor,
         prev_len: int,
+        prev_slow_tokens: int,
         xf_accum: Optional[torch.Tensor],
-    ) -> tuple[torch.Tensor, torch.Tensor, int, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, int, torch.Tensor, int]:
         xf_step = self.embedder.encode(
             cur_data_input,
             times_prefix,
@@ -611,7 +806,15 @@ class MultiscaleBCAT(nn.Module):
             pool_ffn=se.pool_ffn,
             spatial_tokens=self.seq_len_per_step,
         )
-        return xf_step, xf_new, lf_tot, xs_slow
+        fast_time = lf_tot // self.seq_len_per_step
+        total_slow_tokens = (fast_time // self.rate) * self.seq_len_per_step
+        if total_slow_tokens > 0:
+            if xs_slow.size(1) != total_slow_tokens:
+                raise RuntimeError("KV rollout: pooled slow length does not match completed slow blocks.")
+            xs_slow_step = xs_slow[:, prev_slow_tokens:total_slow_tokens]
+        else:
+            xs_slow_step = xs_slow[:, :0]
+        return xf_step, xf_new, lf_tot, xs_slow_step, total_slow_tokens
 
     def forward(self, mode, **kwargs):
         if mode == "fwd":
@@ -642,13 +845,14 @@ class MultiscaleBCAT(nn.Module):
             self.cache_dtype = dtype
             max_lf = self.max_data_len * self.seq_len_per_step
             self.cache = KVCache(
-                2 * self.config.n_layer,
+                4 * self.config.n_layer,
                 max_batch_size,
                 max_lf,
                 self.config.n_head,
                 self.config.dim_emb // self.config.n_head,
                 dtype=dtype,
                 device=next(self.parameters()).device,
+                return_full_cache=self.return_full_cache,
             )
         else:
             self.cache = None
@@ -682,77 +886,58 @@ class MultiscaleBCAT(nn.Module):
                     or max_lf > cache_shape[2]
                     or self.cache.k_cache[0].dtype != cache_dtype
                     or self.cache.device != data_input.device
+                    or self.cache.return_full_cache != self.return_full_cache
                 )
             if need_new_cache:
                 self.cache = KVCache(
-                    2 * self.config.n_layer,
+                    4 * self.config.n_layer,
                     bs,
                     max_lf,
                     self.config.n_head,
                     self.config.dim_emb // self.config.n_head,
                     dtype=cache_dtype,
                     device=data_input.device,
+                    return_full_cache=self.return_full_cache,
                 )
                 self.cache_dtype = cache_dtype
             self.cache.reset()
             attn_cache = self.cache
+            generation_masks = self._build_generation_masks(
+                t_num,
+                input_len,
+                device=data_input.device,
+                dtype=data_input.dtype,
+            )
 
         xf_accum = None
+        prev_slow_tokens = 0
 
         for _i in range(output_len):
             cur_data_input = data_all[:, :cur_len]
 
-            masks = self._build_masks(
-                fast_time,
-                slow_time,
-                device=cur_data_input.device,
-                dtype=cur_data_input.dtype,
-            )
-
             if kv_cache_rollout:
-                xf_step, xf_accum, lf_tot, xs_slow = self._kv_rollout_embed_and_slow(
+                xf_step, xf_accum, lf_tot, xs_slow_step, total_slow_tokens = self._kv_rollout_embed_and_slow(
                     cur_data_input,
                     times[:, :cur_len],
                     prev_len,
+                    prev_slow_tokens,
                     xf_accum,
                 )
                 nt = cur_data_input.size(1)
                 st = self.seq_len_per_step
                 if lf_tot != nt * st:
-                    raise RuntimeError(f"KV rollout: lf_tot != nt*st.")
+                    raise RuntimeError("KV rollout: lf_tot != nt*st.")
                 new_frames = nt - prev_len
                 if xf_step.size(1) != new_frames * st:
-                    raise RuntimeError(f"KV rollout: xf_step len != new_frames*st.")
-                
+                    raise RuntimeError("KV rollout: xf_step len != new_frames*st.")
+
                 if self.flex_attn:
-                    masks_kv = dict(masks)
-                    if xf_step.size(1) < lf_tot:
-                        # Utilizing the new incremental mask LRU Cache
-                        masks_kv["fast_self_block_mask_incremental"] = _cached_fast_self_block_mask_incremental(
-                            lf_tot,
-                            xf_step.size(1),
-                            self.seq_len_per_step,
-                            str(cur_data_input.device),
-                            self._self_window,
-                            self._attn_sink_tokens,
-                        )
-                    # Utilizing the new incremental mask LRU Cache
-                    masks_kv["fast_to_slow_block_mask_incremental"] = _cached_fast_to_slow_block_mask_incremental(
-                        lf_tot,
-                        xf_step.size(1),
-                        slow_time,
-                        self.rate,
-                        self.seq_len_per_step,
-                        str(cur_data_input.device),
-                        self._fast_to_slow_window,
-                        self._attn_sink_tokens,
-                    )
-                    
-                    # Call compiled kv_rollout
+                    masks_kv = generation_masks["step_masks"][_i]
                     cur_data_encoded = self._compiled_kv_rollout(
                         fast_incremental_residual=xf_step,
                         total_fast_tokens=lf_tot,
-                        slow_full_residual=xs_slow,
+                        slow_incremental_residual=xs_slow_step,
+                        total_slow_tokens=total_slow_tokens,
                         masks=masks_kv,
                         spatial_tokens=self.seq_len_per_step,
                         kv_cache=attn_cache,
@@ -762,27 +947,41 @@ class MultiscaleBCAT(nn.Module):
                         cur_data_encoded = self.transformer.forward_rollout_kv_cache(
                             fast_incremental_residual=xf_step,
                             total_fast_tokens=lf_tot,
-                            slow_full_residual=xs_slow,
-                            masks=masks,
+                            slow_incremental_residual=xs_slow_step,
+                            total_slow_tokens=total_slow_tokens,
+                            masks=generation_masks,
                             spatial_tokens=self.seq_len_per_step,
                             kv_cache=attn_cache,
                         )
+                prev_slow_tokens = total_slow_tokens
             elif self.flex_attn:
+                masks = self._build_masks(
+                    fast_time,
+                    slow_time,
+                    device=cur_data_input.device,
+                    dtype=cur_data_input.dtype,
+                )
                 cur_data_encoded = self._compiled_transformer_gen(
                     data=cur_data_input,
                     times=times[:, :cur_len],
                     masks=masks,
                 )
             else:
+                masks = self._build_masks(
+                    fast_time,
+                    slow_time,
+                    device=cur_data_input.device,
+                    dtype=cur_data_input.dtype,
+                )
                 cur_data_encoded = self._transformer_dense(
                     data=cur_data_input,
                     times=times[:, :cur_len],
                     masks=masks,
                 )
 
-            new_output = cur_data_encoded[:, -1:] # (bs, 1, x_num**2*data_dim)
+            new_output = cur_data_encoded[:, -1:]  # (bs, 1, x_num**2*data_dim)
 
-            new_output = new_output * data_mask # (bs, 1, x_num, x_num, data_dim)
+            new_output = new_output * data_mask  # (bs, 1, x_num, x_num, data_dim)
 
             if carry_over_c >= 0:
                 new_output[:, 0, :, :, carry_over_c] = data_all[:, 0, :, :, carry_over_c]

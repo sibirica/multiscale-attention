@@ -12,7 +12,8 @@ from rotary_embedding_torch import RotaryEmbedding
 from .attention_utils import FFN, get_activation, MultiheadAttention, MultiheadFlexAttention, _get_clones
 from .kv_cache import KVCache
 
-class AsymmetricFFN(nn.Module): ### Note: not currently used
+
+class AsymmetricFFN(nn.Module):  ### Note: not currently used
     def __init__(self, in_dim, hidden_dim, out_dim, act="gelu", dropout=0):
         super().__init__()
 
@@ -33,7 +34,8 @@ class AsymmetricFFN(nn.Module): ### Note: not currently used
         else:
             return self.fc2(self.dropout(self.activation(self.fc1(x), self.fc_gate(x))))
 
-def lift( ### Note: not currently used
+
+def lift(  ### Note: not currently used
     s: torch.Tensor,
     rate: int,
     time_dim: int = 1,
@@ -76,6 +78,7 @@ def lift( ### Note: not currently used
     x = rearrange(x, "b t s d -> b (t s) d")
     return x.movedim(1, time_dim)
 
+
 class PoolFFN(nn.Module):
     """
     Feed-forward mapper from a fast block of shape [..., rate, C_in] to a single slow step [..., C_out].
@@ -117,6 +120,7 @@ class PoolFFN(nn.Module):
         else:
             y = self.fc2(self.dropout(self.activation(self.fc1(x_flat), self.fc_gate(x_flat))))
         return y
+
 
 def pool(
     f: torch.Tensor,
@@ -199,6 +203,7 @@ def pool(
     s = rearrange(s_blocks, "b t s d -> b (t s) d")
     return s.movedim(1, time_dim)
 
+
 class SplitEncoder(nn.Module):
     """
     Wrapper that computes a fast embedding via the embedder,
@@ -235,7 +240,8 @@ class SplitEncoder(nn.Module):
         )
         return f, s
 
-# Note: is_causal is somewhat redundant since the masks are causal anyway, 
+
+# Note: is_causal is somewhat redundant since the masks are causal anyway,
 # but it seems like we're setting it to False everywhere anyway
 class TwoScaleTransformerEncoderLayer(nn.Module):
     """
@@ -255,7 +261,7 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         qk_norm: bool = False,
         flex_attn: bool = False,
         shared_scale_ffn: bool = False,
-        disable_slow_scale: bool = False, ### FLAG FOR DEBUGGING W/O SLOW SCALE
+        disable_slow_scale: bool = False,  ### FLAG FOR DEBUGGING W/O SLOW SCALE
         norm: type[nn.Module] = nn.LayerNorm,
     ) -> None:
         super().__init__()
@@ -263,7 +269,7 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         self.slow_embed_dim = slow_embed_dim
         self.rate = rate
 
-        self.disable_slow_scale = disable_slow_scale # True
+        self.disable_slow_scale = disable_slow_scale  # True
 
         if fast_embed_dim != slow_embed_dim:
             raise ValueError("Cross-attention requires fast_embed_dim == slow_embed_dim.")
@@ -288,7 +294,7 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
             bias=bias,
             qk_norm=qk_norm,
         )
-        if self.disable_slow_scale: # no bias from slow scale either
+        if self.disable_slow_scale:  # no bias from slow scale either
             self.cross_attn_fast = CrossMHA(
                 fast_embed_dim,
                 num_heads=num_heads,
@@ -327,8 +333,8 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
 
     def forward(
         self,
-        x_fast: torch.Tensor,   # [B, L_fast, D_fast]
-        x_slow: torch.Tensor,   # [B, L_slow, D_slow]
+        x_fast: torch.Tensor,  # [B, L_fast, D_fast]
+        x_slow: torch.Tensor,  # [B, L_slow, D_slow]
         masks: dict,
         is_causal: bool = False,
         spatial_tokens: int = 1,
@@ -457,13 +463,31 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         )
         return z_self, z_cross
 
-    # Added by Cursor Composer 2.
+    def _update_kv_cache_only(
+        self,
+        attn: nn.Module,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        kv_cache: KVCache,
+    ) -> None:
+        bs, k_len, _ = key.size()
+        k = attn.linear_k(key)
+        v = attn.linear_v(value)
+        k = k.view(bs, k_len, attn.num_heads, attn.head_dim)
+        v = v.view(bs, k_len, attn.num_heads, attn.head_dim)
+        if attn.qk_norm:
+            k = attn.k_norm(k).to(k.dtype)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+        kv_cache.update(k, v)
+
     def forward_kv_cache_block(
         self,
         kv_slot_base: int,
         fast_incremental_residual: torch.Tensor,
-        slow_full_residual: torch.Tensor,
+        slow_incremental_residual: torch.Tensor,
         total_fast_tokens: int,
+        total_slow_tokens: int,
         incremental_fast_len: int,
         masks: dict,
         kv_cache: KVCache,
@@ -474,19 +498,20 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
 
         **Lengths (fast axis is flattened patches-per-frame):**
 
-        - ``total_fast_tokens``: full prefix length after this step's new tokens join KV
+        - ``total_fast_tokens``: full fast prefix length after this step's new tokens join KV
           (`lf` elsewhere in the codebase).
+        - ``total_slow_tokens``: full completed slow prefix length after this step's new
+          slow tokens join KV.
         - ``incremental_fast_len``: sequence length of ``fast_incremental_residual``
           (= ``xf_step.size(1)`` after BCAT-like ``skip_len`` encoding).
 
-        ``kv_slot_base`` is ``2 * layer_index``: slot ``kv_slot_base`` holds fast-stream
-        self-attention KV; slot ``kv_slot_base + 1`` holds slow→fast cross-attention KV
-        (keys/values on the fast stream).
+        ``kv_slot_base`` is ``4 * layer_index``:
+        slot ``+0`` holds fast self-attention KV, ``+1`` holds fast→slow
+        cross-attention KV on the slow stream, ``+2`` holds slow self-attention
+        KV, and ``+3`` holds slow→fast cross-attention KV on the fast stream.
 
-        Supports dense ``attn_mask`` tensors and/or flex ``BlockMask`` objects; see
-        ``forward()`` keys. For incremental flex rollout, callers add
-        ``fast_self_block_mask_incremental`` and ``fast_to_slow_block_mask_incremental``
-        when ``incremental_fast_len < total_fast_tokens`` (see ``MultiscaleBCAT.generate``).
+        The KV rollout uses dense masks so compiled generation can reuse one
+        prebuilt mask dictionary across all decoding steps.
 
         Rotary is not supported in this path (``rotary_emb`` must be ``None``).
 
@@ -494,59 +519,49 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         **Tensor shapes (B=batch):**
 
         - ``fast_incremental_residual``: ``[B, incremental_fast_len, D_fast]`` (this AR step's fast patches only).
-        - ``slow_full_residual``: ``[B, slow_len, D_slow]`` with ``slow_len = slow_time * spatial_tokens`` for current prefix.
+        - ``slow_incremental_residual``: ``[B, incremental_slow_len, D_slow]`` for
+          newly completed slow blocks only.
         - Returns ``(fast_out, slow_out)`` with the same ``[B, *, D]`` leading dimensions as the inputs above.
         """
         if rotary_emb is not None:
             raise RuntimeError("Multiscale KV inference does not support rotary embeddings.")
 
-        # Matches ``slow_full_residual.size(1)`` below; dense masks slice as ``[..., :slow_len, ...]``.
-        slow_len = slow_full_residual.size(1)
+        if self.disable_slow_scale:
+            slow_incremental_residual = slow_incremental_residual * 0.0
+
+        incremental_slow_len = slow_incremental_residual.size(1)
 
         # Same pre-norm layout as ``forward()``; activations stay ``[B, L, D]`` along each stream.
         fast_for_attn = self.norm_fast_attn(fast_incremental_residual)  # [B, incremental_fast_len, D_fast]
-        slow_for_attn = self.norm_slow_attn(slow_full_residual)  # [B, slow_len, D_slow]
+        slow_for_attn = self.norm_slow_attn(slow_incremental_residual)
 
-        # Dense: float additive ``attn_mask`` for SDPA. Flex: ``BlockMask`` with matching (q_seq, kv_seq) lengths.
+        # Dense uses float additive masks for SDPA; flex uses BlockMask objects.
         dense_fast_self = masks.get("fast_self_attn_mask")
         dense_fast_to_slow = masks.get("fast_to_slow_attn_mask")
         dense_slow_self = masks.get("slow_self_attn_mask")
         dense_slow_to_fast = masks.get("slow_to_fast_attn_mask")
-        block_fast_self_prefill = masks.get("fast_block_mask")
-        block_fast_self_incremental = masks.get("fast_self_block_mask_incremental")
-        block_fast_to_slow_incremental = masks.get("fast_to_slow_block_mask_incremental")
+        block_fast_self = masks.get("fast_block_mask")
+        block_fast_to_slow = masks.get("fast_to_slow_block_mask")
         block_slow_self = masks.get("slow_block_mask")
         block_slow_to_fast = masks.get("slow_to_fast_block_mask")
+        fast_kv_len = (
+            dense_fast_self.size(1) if dense_fast_self is not None and kv_cache.return_full_cache else total_fast_tokens
+        )
+        slow_kv_len = (
+            dense_fast_to_slow.size(1)
+            if dense_fast_to_slow is not None and kv_cache.return_full_cache
+            else total_slow_tokens
+        )
 
         # --- Fast self-attention (writes KV slot ``kv_slot_base``). ---
-        # With KV cache, K/V extend to ``total_fast_tokens`` rows while Q is only ``incremental_fast_len``,
-        # so dense uses a trailing row slice; flex needs either full ``[Lf, Lf]`` prefill blocks (cold start),
-        # or rectangular ``fast_self_block_mask_incremental``.
         attn_mask_fast_self = None
-        block_fast_self = None
         if dense_fast_self is not None:
             attn_mask_fast_self = dense_fast_self[
                 total_fast_tokens - incremental_fast_len : total_fast_tokens,
-                :total_fast_tokens,
+                :fast_kv_len,
             ]
-            # dense tail rows: [incremental_fast_len, total_fast_tokens]
-        elif block_fast_self_prefill is not None:
-            if incremental_fast_len == total_fast_tokens:
-                block_fast_self = block_fast_self_prefill
-            else:
-                if block_fast_self_incremental is None:
-                    raise RuntimeError(
-                        "multiscale KV flex rollout: need fast_self_block_mask_incremental when "
-                        "incremental_fast_len < total_fast_tokens (sizes differ after KV concat)."
-                    )
-                block_fast_self = block_fast_self_incremental
-        if attn_mask_fast_self is None and block_fast_self is None and incremental_fast_len > 0:
-            raise RuntimeError(
-                "multiscale KV: fast self-attention needs dense mask, prefill flex block, or incremental flex block."
-            )
 
         kv_cache.set_layer(kv_slot_base)
-        # Q/K/V sequences are ``incremental_fast_len``; KV cache holds ``total_fast_tokens`` positions along keys after update.
         attn_delta_fast_self = self.self_attn_fast(
             fast_for_attn,
             fast_for_attn,
@@ -557,98 +572,91 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
             rotary_emb=None,
             cache=kv_cache,
         )
-        # attn_delta_fast_self: [B, incremental_fast_len, D_fast]
 
-        # --- Fast attends to pooled slow (no KV cache here; slow side is rebuilt each outer step via ``pool``). ---
-        # Flex rollout adds ``fast_to_slow_block_mask_incremental`` so ``mask_mod`` indices match truncated queries.
-        if block_fast_to_slow_incremental is not None:
-            attn_mask_fast_to_slow = None
-            block_fast_to_slow = block_fast_to_slow_incremental
-        elif dense_fast_to_slow is not None:
-            # Dense cross mask is [L_fast, L_slow]; we take query rows for the current fast tail only.
-            attn_mask_fast_to_slow = dense_fast_to_slow[
-                total_fast_tokens - incremental_fast_len : total_fast_tokens,
-                :slow_len,
-            ]
-            block_fast_to_slow = None
-            # attn_mask_fast_to_slow dense: [incremental_fast_len, slow_len]
+        # --- Fast attends to pooled slow (writes/reads KV slot ``kv_slot_base + 1``). ---
+        if total_slow_tokens == 0:
+            attn_delta_fast_from_slow = torch.zeros_like(fast_incremental_residual)
         else:
-            block_fast_to_slow_full = masks.get("fast_to_slow_block_mask")
-            if block_fast_to_slow_full is not None and incremental_fast_len == total_fast_tokens:
-                attn_mask_fast_to_slow = None
-                block_fast_to_slow = block_fast_to_slow_full
-            else:
-                raise RuntimeError(
-                    "multiscale KV rollout: need fast→slow masking (dense row slice, full flex "
-                    "block when incremental_fast_len equals total_fast_tokens, or "
-                    "fast_to_slow_block_mask_incremental for flex rollout)."
-                )
+            attn_mask_fast_to_slow = None
+            if dense_fast_to_slow is not None:
+                attn_mask_fast_to_slow = dense_fast_to_slow[
+                    total_fast_tokens - incremental_fast_len : total_fast_tokens,
+                    :slow_kv_len,
+                ]
+            kv_cache.set_layer(kv_slot_base + 1)
+            attn_delta_fast_from_slow = self.cross_attn_fast(
+                fast_for_attn,
+                slow_for_attn,
+                slow_for_attn,
+                attn_mask=attn_mask_fast_to_slow,
+                block_mask=block_fast_to_slow,
+                is_causal=False,
+                rotary_emb=None,
+                cache=kv_cache,
+            )
 
-        attn_delta_fast_from_slow = self.cross_attn_fast(
-            fast_for_attn,
-            slow_for_attn,
-            slow_for_attn,
-            attn_mask=attn_mask_fast_to_slow,
-            block_mask=block_fast_to_slow,
-            is_causal=False,
-            rotary_emb=None,
-            cache=None,
-        )
-        # attn_delta_fast_from_slow: [B, incremental_fast_len, D_fast]
+        if incremental_slow_len == 0:
+            kv_cache.set_layer(kv_slot_base + 3)
+            self._update_kv_cache_only(self.cross_attn_slow, fast_for_attn, fast_for_attn, kv_cache)
+            slow_after_ffn = slow_incremental_residual
+        else:
+            # --- Slow self-attention (writes/reads KV slot ``kv_slot_base + 2``). ---
+            attn_mask_slow_self = None
+            if dense_slow_self is not None:
+                attn_mask_slow_self = dense_slow_self[
+                    total_slow_tokens - incremental_slow_len : total_slow_tokens,
+                    :slow_kv_len,
+                ]
+            kv_cache.set_layer(kv_slot_base + 2)
+            attn_delta_slow_self = self.self_attn_slow(
+                slow_for_attn,
+                slow_for_attn,
+                slow_for_attn,
+                attn_mask=attn_mask_slow_self,
+                block_mask=block_slow_self,
+                is_causal=False,
+                rotary_emb=None,
+                cache=kv_cache,
+            )
 
-        attn_mask_slow_self = dense_slow_self[:slow_len, :slow_len] if dense_slow_self is not None else None
-        # dense: [slow_len, slow_len]; flex uses ``block_slow_self`` for same Ls x Ls geometry
-        attn_delta_slow_self = self.self_attn_slow(
-            slow_for_attn,
-            slow_for_attn,
-            slow_for_attn,
-            attn_mask=attn_mask_slow_self,
-            block_mask=block_slow_self,
-            is_causal=False,
-            rotary_emb=None,
-            cache=None,
-        )
-        # attn_delta_slow_self: [B, slow_len, D_slow]
-
-        kv_cache.set_layer(kv_slot_base + 1)
-        # Slow queries read fast K/V - second logical slot pairs with fast KV length ``total_fast_tokens``.
-        attn_mask_slow_to_fast = (
-            dense_slow_to_fast[:slow_len, :total_fast_tokens]
-            if dense_slow_to_fast is not None
-            else None
-        )
-        # dense: [slow_len, total_fast_tokens]; flex ``block_slow_to_fast`` matches (Ls, Lf) with Lf = total_fast_tokens
-        attn_delta_slow_from_fast = self.cross_attn_slow(
-            slow_for_attn,
-            fast_for_attn,
-            fast_for_attn,
-            attn_mask=attn_mask_slow_to_fast,
-            block_mask=block_slow_to_fast,
-            is_causal=False,
-            rotary_emb=None,
-            cache=kv_cache,
-        )
-        # attn_delta_slow_from_fast: [B, slow_len, D_slow]; fast K/V span ``total_fast_tokens`` after KV update.
+            # --- Slow queries read fast K/V (writes/reads KV slot ``kv_slot_base + 3``). ---
+            kv_cache.set_layer(kv_slot_base + 3)
+            attn_mask_slow_to_fast = None
+            if dense_slow_to_fast is not None:
+                attn_mask_slow_to_fast = dense_slow_to_fast[
+                    total_slow_tokens - incremental_slow_len : total_slow_tokens,
+                    :fast_kv_len,
+                ]
+            attn_delta_slow_from_fast = self.cross_attn_slow(
+                slow_for_attn,
+                fast_for_attn,
+                fast_for_attn,
+                attn_mask=attn_mask_slow_to_fast,
+                block_mask=block_slow_to_fast,
+                is_causal=False,
+                rotary_emb=None,
+                cache=kv_cache,
+            )
+            slow_attn_residual = slow_incremental_residual + attn_delta_slow_self + attn_delta_slow_from_fast
+            slow_after_ffn = slow_attn_residual + self.ffn_slow(self.norm_slow_ffn(slow_attn_residual))
 
         # Residual + FFN ordering matches ``forward()`` branch on this layer.
         fast_attn_residual = fast_incremental_residual + attn_delta_fast_self + attn_delta_fast_from_slow
         fast_after_ffn = fast_attn_residual + self.ffn_fast(self.norm_fast_ffn(fast_attn_residual))
-
-        slow_attn_residual = slow_full_residual + attn_delta_slow_self + attn_delta_slow_from_fast
-        slow_after_ffn = slow_attn_residual + self.ffn_slow(self.norm_slow_ffn(slow_attn_residual))
-        # fast_after_ffn: [B, incremental_fast_len, D_fast], slow_after_ffn: [B, slow_len, D_slow]
         return fast_after_ffn, slow_after_ffn
+
 
 class Decoder(nn.Module):
     """Common interface for recombination decoders."""
 
 
-class RecombineDecoder(Decoder): ### note: not currently used
+class RecombineDecoder(Decoder):  ### note: not currently used
     """
     Recombine (z_fast, z_slow) into a fast-length sequence via channel concatenation
     after lifting z_slow to the fast time scale, followed by a 2-layer MLP to project
     back to fast_embed_dim.
     """
+
     def __init__(
         self,
         fast_embed_dim: int,
@@ -701,15 +709,15 @@ class RecombineDecoder(Decoder): ### note: not currently used
         self.activation = get_activation(act)()
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.fc2 = nn.Linear(hidden_dim, fast_embed_dim)
-        #self.norm_fast = nn.LayerNorm(fast_embed_dim)
-        #self.norm_slow = nn.LayerNorm(slow_embed_dim)
-        self.norm_fast = norm(in_dim) # nn.LayerNorm(in_dim)
+        # self.norm_fast = nn.LayerNorm(fast_embed_dim)
+        # self.norm_slow = nn.LayerNorm(slow_embed_dim)
+        self.norm_fast = norm(in_dim)  # nn.LayerNorm(in_dim)
 
     def forward(self, z_fast: torch.Tensor, z_slow: torch.Tensor) -> torch.Tensor:
         if self.training:
             self._has_logged = False
         # Align time scales by lifting z_slow to the fast length
-        slow_feedback_off = False # debug mode: pull zeros from slow scale
+        slow_feedback_off = False  # debug mode: pull zeros from slow scale
         # if slow_feedback_off:
         #     z_slow_lift = z_fast.new_zeros(*z_fast.shape[:-1], self.slow_embed_dim)
         # else:
@@ -720,7 +728,7 @@ class RecombineDecoder(Decoder): ### note: not currently used
             ffn=self.lift_ffn,
             spatial_tokens=self.spatial_tokens,
         )  # [..., L_fast, slow_embed_dim]
-        
+
         if self.lift_norm is not None:
             z_slow_lift = self.lift_norm(z_slow_lift)
 
@@ -734,18 +742,16 @@ class RecombineDecoder(Decoder): ### note: not currently used
         if self._should_log_norms():
             wandb.log(
                 {
-                    "debug/recombine_z_fast_l2_norm": 
-                    z_fast.detach().norm(dim=-1).mean().item(),
-                    "debug/recombine_z_slow_lift_l2_norm": 
-                    z_slow_lift.detach().norm(dim=-1).mean().item(),
+                    "debug/recombine_z_fast_l2_norm": z_fast.detach().norm(dim=-1).mean().item(),
+                    "debug/recombine_z_slow_lift_l2_norm": z_slow_lift.detach().norm(dim=-1).mean().item(),
                 },
                 commit=False,
             )
             if self.log_once:
                 self._has_logged = True
-        #z_fast_norm = self.norm_fast(z_fast)
-        #z_slow_norm = self.norm_slow(z_slow_lift)
-        #x = torch.cat([z_fast_norm, z_slow_norm], dim=-1)
+        # z_fast_norm = self.norm_fast(z_fast)
+        # z_slow_norm = self.norm_slow(z_slow_lift)
+        # x = torch.cat([z_fast_norm, z_slow_norm], dim=-1)
         x = torch.cat([z_fast, z_slow_lift], dim=-1)
         x = self.norm_fast(x)
         if self.fc_gate is None:
@@ -766,6 +772,7 @@ class RecombineDecoder(Decoder): ### note: not currently used
         if dist.is_available() and dist.is_initialized() and dist.get_rank() != 0:
             return False
         return True
+
 
 class FastOnlyRecombineDecoder(Decoder):
     """
@@ -788,6 +795,7 @@ class FastOnlyRecombineDecoder(Decoder):
         y = self.norm_fast(z_fast)
         return self.embedder.decode(y)
 
+
 class TwoScaleTransformerEncoder(nn.Module):
     """
     Stack of TwoScaleTransformerEncoderLayer layers, mirroring CustomTransformerEncoder but
@@ -798,8 +806,8 @@ class TwoScaleTransformerEncoder(nn.Module):
         self,
         encoder_layer: TwoScaleTransformerEncoderLayer,
         num_layers: int,
-        #norm_fast: Optional[nn.Module] = None,
-        #norm_slow: Optional[nn.Module] = None,
+        # norm_fast: Optional[nn.Module] = None,
+        # norm_slow: Optional[nn.Module] = None,
         split_encoder: Optional[SplitEncoder] = None,
         decoder: Optional[Decoder] = None,
         config=None,
@@ -808,8 +816,8 @@ class TwoScaleTransformerEncoder(nn.Module):
         self.layers = _get_clones(encoder_layer, num_layers)
         self.num_layers = num_layers
         self.rate = encoder_layer.rate
-        #self.norm_fast = norm_fast
-        #self.norm_slow = norm_slow
+        # self.norm_fast = norm_fast
+        # self.norm_slow = norm_slow
         self.split_encoder = split_encoder
         self.decoder = decoder
         if config is not None and config.rotary:
@@ -924,12 +932,12 @@ class TwoScaleTransformerEncoder(nn.Module):
 
         return out_fast, out_slow
 
-    # Added by Cursor Composer 2.
     def forward_rollout_kv_cache(
         self,
         fast_incremental_residual: torch.Tensor,
         total_fast_tokens: int,
-        slow_full_residual: torch.Tensor,
+        slow_incremental_residual: torch.Tensor,
+        total_slow_tokens: int,
         *,
         masks: dict,
         spatial_tokens: int,
@@ -942,10 +950,12 @@ class TwoScaleTransformerEncoder(nn.Module):
         ``forward_kv_cache_block``), similar in spirit to BCAT consuming one slot per depth.
 
         Arguments match ``forward_kv_cache_block`` tensors/lengths:
-        ``fast_incremental_residual``, ``total_fast_tokens``, ``slow_full_residual``.
+        ``fast_incremental_residual``, ``total_fast_tokens``,
+        ``slow_incremental_residual``, ``total_slow_tokens``.
 
         **Shapes:** ``fast_incremental_residual`` is ``[B, incremental_fast_len, D_fast]``,
-        ``slow_full_residual`` is ``[B, slow_len, D_slow]``. Returns decoded grid per
+        ``slow_incremental_residual`` is ``[B, incremental_slow_len, D_slow]``.
+        Returns decoded grid per
         ``spatial_tokens`` tail (see ``out_fast`` slice below).
         """
         if self.rotary:
@@ -954,14 +964,15 @@ class TwoScaleTransformerEncoder(nn.Module):
         # ``incremental_fast_len`` matches BCAT ``CacheCustomTransformerEncoderLayer`` ``new_len`` for this step.
         incremental_fast_len = fast_incremental_residual.size(1)
         fast_stream = fast_incremental_residual
-        slow_stream = slow_full_residual
+        slow_stream = slow_incremental_residual
         for layer_idx, layer in enumerate(self.layers):
-            kv_slot_base = 2 * layer_idx  # two KV slots per stacked two-scale layer (see ``forward_kv_cache_block``).
+            kv_slot_base = 4 * layer_idx
             fast_stream, slow_stream = layer.forward_kv_cache_block(
                 kv_slot_base,
                 fast_stream,
                 slow_stream,
                 total_fast_tokens,
+                total_slow_tokens,
                 incremental_fast_len,
                 masks,
                 kv_cache,
@@ -976,8 +987,8 @@ class TwoScaleTransformerEncoder(nn.Module):
             case _:
                 raise NotImplementedError("forward_rollout_kv_cache supports FastOnlyRecombineDecoder.")
 
-if __name__ == "__main__":
 
+if __name__ == "__main__":
     torch.manual_seed(0)
     from models.multiscale_bcat import (
         build_fast_to_slow_mask,
@@ -1048,8 +1059,8 @@ if __name__ == "__main__":
     encoder = TwoScaleTransformerEncoder(
         encoder_layer=layer,
         num_layers=2,
-        #norm_fast=nn.LayerNorm(fast_embed_dim),
-        #norm_slow=nn.LayerNorm(slow_embed_dim),
+        # norm_fast=nn.LayerNorm(fast_embed_dim),
+        # norm_slow=nn.LayerNorm(slow_embed_dim),
         split_encoder=split_encoder,
         decoder=decoder,
     )
@@ -1060,12 +1071,8 @@ if __name__ == "__main__":
     x_fast = torch.randn(batch_size, fast_seq_len, fast_embed_dim)
     x_slow = torch.randn(batch_size, slow_seq_len, slow_embed_dim)
 
-    fast_self_mask = build_self_attn_mask(
-        time_len_fast, spatial_tokens, device=x_fast.device, dtype=x_fast.dtype
-    )
-    slow_self_mask = build_self_attn_mask(
-        time_len_slow, spatial_tokens, device=x_fast.device, dtype=x_fast.dtype
-    )
+    fast_self_mask = build_self_attn_mask(time_len_fast, spatial_tokens, device=x_fast.device, dtype=x_fast.dtype)
+    slow_self_mask = build_self_attn_mask(time_len_slow, spatial_tokens, device=x_fast.device, dtype=x_fast.dtype)
     fast_to_slow_mask = build_fast_to_slow_mask(
         time_len_fast, time_len_slow, rate, spatial_tokens, device=x_fast.device, dtype=x_fast.dtype
     )

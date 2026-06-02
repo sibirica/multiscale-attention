@@ -84,6 +84,7 @@ def _bcat_config():
             norm_first=True,
             qk_norm=False,
             norm="layer",
+            act_ckpt=False,
             activation="gelu",
             rotary=False,
             flex_attn=False,
@@ -120,6 +121,7 @@ def _multiscale_config():
             norm_first=True,
             qk_norm=False,
             norm="layer",
+            act_ckpt=False,
             activation="gelu",
             recombine_activation="gelu",
             rotary=False,
@@ -161,12 +163,7 @@ def _make_inputs(seed: int = 0):
     torch.manual_seed(seed)
     bs = 2
     data = torch.randn(bs, T_NUM, X_NUM, X_NUM, DATA_DIM, device=DEVICE)
-    times = (
-        torch.linspace(0.0, 1.0, T_NUM, device=DEVICE)
-        .view(1, T_NUM, 1)
-        .expand(bs, -1, -1)
-        .contiguous()
-    )
+    times = torch.linspace(0.0, 1.0, T_NUM, device=DEVICE).view(1, T_NUM, 1).expand(bs, -1, -1).contiguous()
     return data, times
 
 
@@ -255,7 +252,7 @@ def causality_check(
             f"[{'should match' if fast_idx < t_perturb_fast else 'allowed to differ'}] {marker}"
         )
     if leak_count == 0:
-        print(f"  RESULT: causal (no leaks)")
+        print("  RESULT: causal (no leaks)")
     else:
         print(f"  RESULT: NOT CAUSAL ({leak_count} leak(s))")
     return leak_count
@@ -320,9 +317,7 @@ def dense_vs_kv_rollout_generate_check(
     _set_disable_slow_scale(m_kv, dr)
 
     data, times = _make_inputs()
-    data_mask = torch.ones(
-        1, 1, 1, 1, data.size(-1), device=data.device, dtype=data.dtype
-    )
+    data_mask = torch.ones(1, 1, 1, 1, data.size(-1), device=data.device, dtype=data.dtype)
 
     g_dense = m_dense(
         "generate",
@@ -341,12 +336,163 @@ def dense_vs_kv_rollout_generate_check(
 
     max_diff = (g_dense - g_kv).abs().max().item()
     ok = max_diff <= atol or torch.allclose(g_dense, g_kv, rtol=1e-3, atol=atol)
+    final_fast_tokens = (T_NUM - 1) * (PATCH_NUM * PATCH_NUM)
+    final_slow_tokens = ((T_NUM - 1) // RATE) * (PATCH_NUM * PATCH_NUM)
+    cache_lengths_ok = True
+    for layer_idx in range(N_LAYER):
+        base = 4 * layer_idx
+        expected_lengths = [
+            final_fast_tokens,
+            final_slow_tokens,
+            final_slow_tokens,
+            final_fast_tokens,
+        ]
+        actual_lengths = m_kv.cache.cache_len[base : base + 4]
+        cache_lengths_ok = cache_lengths_ok and actual_lengths == expected_lengths
     suffix = "(disable_slow_scale=True)" if dr else "(disable_slow_scale=False)"
     print(f"\n===== dense vs kv rollout generate: {label} {suffix} =====")
-    print(
-        f"  max |dense - kv| = {max_diff:.3e}; atol={atol:.0e}; "
-        f"{'OK' if ok else 'FAIL'}"
-    )
+    print(f"  max |dense - kv| = {max_diff:.3e}; atol={atol:.0e}; {'OK' if ok else 'FAIL'}")
+    print(f"  cache lengths match four-attention layout: {'OK' if cache_lengths_ok else 'FAIL'}")
+    return 0 if ok and cache_lengths_ok else 1
+
+
+def fixed_generation_mask_slice_check() -> int:
+    """Compare fixed KV generation masks against independently built per-step masks."""
+    cfg = _multiscale_config()
+    cfg.kv_cache = True
+    model = MultiscaleBCAT(cfg, X_NUM, DATA_DIM, max_data_len=T_NUM).to(DEVICE)
+    masks_full = model._build_generation_masks(T_NUM, INPUT_LEN, device=DEVICE, dtype=torch.float32)
+    st = PATCH_NUM * PATCH_NUM
+
+    prev_fast_time = 0
+    prev_slow_tokens = 0
+    ok = True
+    for cur_len in range(INPUT_LEN, T_NUM):
+        fast_tokens = cur_len * st
+        incremental_fast_tokens = (cur_len - prev_fast_time) * st if prev_fast_time else fast_tokens
+        slow_time = cur_len // RATE
+        slow_tokens = slow_time * st
+        incremental_slow_tokens = slow_tokens - prev_slow_tokens
+
+        fast_self = build_self_attn_mask(
+            cur_len,
+            st,
+            device=DEVICE,
+            dtype=torch.float32,
+            window=model._self_window,
+            sink_tokens=model._attn_sink_tokens,
+        )
+        full_fast_self = masks_full["fast_self_attn_mask"][
+            fast_tokens - incremental_fast_tokens : fast_tokens,
+            :fast_tokens,
+        ]
+        ok = ok and torch.equal(
+            full_fast_self,
+            fast_self[fast_tokens - incremental_fast_tokens : fast_tokens, :fast_tokens],
+        )
+
+        if slow_tokens > 0:
+            fast_to_slow = build_fast_to_slow_mask(
+                cur_len,
+                slow_time,
+                RATE,
+                st,
+                device=DEVICE,
+                dtype=torch.float32,
+                window=model._fast_to_slow_window,
+                sink_tokens=model._attn_sink_tokens,
+            )
+            full_fast_to_slow = masks_full["fast_to_slow_attn_mask"][
+                fast_tokens - incremental_fast_tokens : fast_tokens,
+                :slow_tokens,
+            ]
+            ok = ok and torch.equal(
+                full_fast_to_slow,
+                fast_to_slow[fast_tokens - incremental_fast_tokens : fast_tokens, :slow_tokens],
+            )
+            ok = (
+                ok
+                and not torch.isfinite(
+                    masks_full["fast_to_slow_attn_mask"][
+                        fast_tokens - incremental_fast_tokens : fast_tokens,
+                        slow_tokens:,
+                    ]
+                )
+                .any()
+                .item()
+            )
+
+        if incremental_slow_tokens > 0:
+            slow_self = build_self_attn_mask(
+                slow_time,
+                st,
+                device=DEVICE,
+                dtype=torch.float32,
+                window=model._self_window,
+                sink_tokens=model._attn_sink_tokens,
+            )
+            full_slow_self = masks_full["slow_self_attn_mask"][
+                slow_tokens - incremental_slow_tokens : slow_tokens,
+                :slow_tokens,
+            ]
+            ok = ok and torch.equal(
+                full_slow_self,
+                slow_self[slow_tokens - incremental_slow_tokens : slow_tokens, :slow_tokens],
+            )
+            ok = (
+                ok
+                and not torch.isfinite(
+                    masks_full["slow_self_attn_mask"][
+                        slow_tokens - incremental_slow_tokens : slow_tokens,
+                        slow_tokens:,
+                    ]
+                )
+                .any()
+                .item()
+            )
+
+            slow_to_fast = build_slow_to_fast_mask(
+                cur_len,
+                slow_time,
+                RATE,
+                st,
+                device=DEVICE,
+                dtype=torch.float32,
+                window=model._slow_to_fast_window,
+                sink_tokens=model._attn_sink_tokens,
+            )
+            full_slow_to_fast = masks_full["slow_to_fast_attn_mask"][
+                slow_tokens - incremental_slow_tokens : slow_tokens,
+                :fast_tokens,
+            ]
+            ok = ok and torch.equal(
+                full_slow_to_fast,
+                slow_to_fast[slow_tokens - incremental_slow_tokens : slow_tokens, :fast_tokens],
+            )
+
+        prev_fast_time = cur_len
+        prev_slow_tokens = slow_tokens
+
+    print("\n===== fixed generation mask slice check =====")
+    print(f"  fixed masks match independent per-step masks: {'OK' if ok else 'FAIL'}")
+    return 0 if ok else 1
+
+
+def prebuilt_flex_generation_block_mask_check() -> int:
+    """Verify flex KV generation prebuilds one BlockMask dictionary per decode step."""
+    cfg = _multiscale_config()
+    cfg.kv_cache = True
+    cfg.flex_attn = True
+    model = MultiscaleBCAT(cfg, X_NUM, DATA_DIM, max_data_len=T_NUM).to(DEVICE)
+    masks = model._build_generation_masks(T_NUM, INPUT_LEN, device=DEVICE, dtype=torch.float32)
+    step_masks = masks["step_masks"]
+    ok = len(step_masks) == T_NUM - INPUT_LEN
+    ok = ok and all(step["fast_block_mask"] is not None for step in step_masks)
+    ok = ok and all(step["fast_self_attn_mask"] is None for step in step_masks)
+    ok = ok and all(step["fast_to_slow_attn_mask"] is None for step in step_masks)
+
+    print("\n===== prebuilt flex generation block mask check =====")
+    print(f"  per-step flex BlockMask dictionaries prebuilt: {'OK' if ok else 'FAIL'}")
     return 0 if ok else 1
 
 
@@ -359,9 +505,7 @@ def attention_sink_mask_check() -> int:
     spatial_tokens = PATCH_NUM * PATCH_NUM
     sink_tokens = 1
 
-    f_self_base = build_self_attn_mask(
-        fast_time, spatial_tokens, device=device, dtype=dtype, window=2, sink_tokens=0
-    )
+    f_self_base = build_self_attn_mask(fast_time, spatial_tokens, device=device, dtype=dtype, window=2, sink_tokens=0)
     f_self_sink = build_self_attn_mask(
         fast_time, spatial_tokens, device=device, dtype=dtype, window=2, sink_tokens=sink_tokens
     )
@@ -450,6 +594,8 @@ def main():
         "MultiscaleBCAT",
         disable_slow_scale=False,
     )
+    n_leaks["fixed_generation_masks"] = fixed_generation_mask_slice_check()
+    n_leaks["prebuilt_flex_block_masks"] = prebuilt_flex_generation_block_mask_check()
     n_leaks["attn_sink_masks"] = attention_sink_mask_check()
 
     print()
