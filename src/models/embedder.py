@@ -31,6 +31,23 @@ def get_embedder(config, x_num: int, max_output_dim: int):
     return embedder(config, x_num, max_output_dim)
 
 
+class STPositionalEmbedding(nn.Module):
+    """Learnable space-time positional embedding for structured patch grids."""
+
+    def __init__(self, patch_num: int, max_time_len: int, dim: int):
+        super().__init__()
+        self.patch_position_embeddings = get_embeddings((1, 1, patch_num, patch_num, dim))
+        self.time_embeddings = get_embeddings((1, max_time_len, 1, 1, dim))
+
+    def forward(self, data: torch.Tensor, times: torch.Tensor, skip_len: int = 0) -> torch.Tensor:
+        """Add learnable space and time embeddings to `(b, t, h, w, d)` tokens."""
+        torch._assert(
+            times.size(1) <= self.time_embeddings.size(1),
+            f"times length {times.size(1)} exceeds max_time_len {self.time_embeddings.size(1)}",
+        )
+        return data + self.time_embeddings[:, skip_len : times.size(1)] + self.patch_position_embeddings
+
+
 def layer_initialize(layer: nn.Module, mode: str = "zero", gamma: float = 0.01):
     # re-initialize given layer to have small outputs
     if mode == "zero":

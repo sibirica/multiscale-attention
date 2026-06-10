@@ -18,8 +18,9 @@ from .attention_utils import (
     CacheCustomTransformerEncoderLayer,
     DynamicTanh,
 )
-from .embedder import get_embedder
+from .embedder import STPositionalEmbedding, get_embedder
 from .kv_cache import KVCache
+from .vae import VAEEmbedder
 
 
 logger = getLogger()
@@ -56,7 +57,14 @@ class BCAT(nn.Module):
         self.x_num = x_num
         self.max_output_dim = max_output_dim
 
-        self.embedder = get_embedder(config.embedder, x_num, max_output_dim)
+        assert config.embedder.type == "vae"
+        self.embedder = VAEEmbedder(config.embedder, x_num, max_output_dim)
+        # self.embedder = get_embedder(config.embedder, x_num, max_output_dim)
+
+        self.patch_num = self.embedder.patch_num
+        self.seq_len_per_step = self.patch_num**2
+        self.positional_embedding = STPositionalEmbedding(self.patch_num, config.embedder.max_time_len, config.dim_emb)
+
         self.flex_attn = config.get("flex_attn", False)
 
         match config.get("norm", "layer"):
@@ -98,14 +106,13 @@ class BCAT(nn.Module):
                 config=config,
             )
 
-        self.seq_len_per_step = config.embedder.patch_num**2
         mask = block_lower_triangular_mask(self.seq_len_per_step, max_data_len, use_float=True)
         self.register_buffer("mask", mask, persistent=False)
 
         self.return_full_cache = False
 
         if self.flex_attn:
-            block_size = config.patch_num**2
+            block_size = self.seq_len_per_step
             seq_len = block_size * (max_data_len - 1)
             self.block_mask = create_block_mask(
                 partial(block_causal, block_size=block_size), None, None, seq_len, seq_len
@@ -115,8 +122,9 @@ class BCAT(nn.Module):
 
     def summary(self):
         s = "\n"
-        s += f"\tEmbedder:        {sum([p.numel() for p in self.embedder.parameters() if p.requires_grad]):,}\n"
-        s += f"\tTransformer:    {sum([p.numel() for p in self.transformer.parameters() if p.requires_grad]):,}"
+        s += f"\tVAE Embedder:    {sum([p.numel() for p in self.embedder.parameters() if p.requires_grad]):,}\n"
+        s += f"\tPos Emb:         {sum(p.numel() for p in self.positional_embedding.parameters() if p.requires_grad):,}\n"
+        s += f"\tTransformer:     {sum([p.numel() for p in self.transformer.parameters() if p.requires_grad]):,}"
         return s
 
     def compile(self, params):
@@ -140,6 +148,19 @@ class BCAT(nn.Module):
         else:
             raise Exception(f"Unknown mode: {mode}")
 
+    def _encode_data(self, data: torch.Tensor, times: torch.Tensor, skip_len: int = 0) -> torch.Tensor:
+        # (b, t, h, w, d) -> (b, (t-skip_len)*ph*pw, d)
+        data = self.embedder.encode(data, skip_len=skip_len)
+        data = self.positional_embedding(data, times, skip_len=skip_len)
+        data = data.reshape(data.size(0), -1, self.config.dim_emb)
+        return data
+
+    def _decode_data(self, data: torch.Tensor) -> torch.Tensor:
+        # (b, t*ph*pw, d) -> (b, t, h, w, d)
+        data = data.reshape(data.size(0), -1, self.patch_num, self.patch_num, self.config.dim_emb)
+        data = self.embedder.decode(data)
+        return data
+
     def fwd(self, data: torch.Tensor, times: torch.Tensor, input_len: int, **kwargs):
         """
         Inputs:
@@ -160,7 +181,7 @@ class BCAT(nn.Module):
                        data_len = (input_len + output_len - 1) * patch_num * patch_num
         """
 
-        data = self.embedder.encode(data, times)  # (bs, data_len, dim)
+        data = self._encode_data(data, times)  # (bs, data_len, dim)
 
         """
         Step 2: Transformer
@@ -182,7 +203,7 @@ class BCAT(nn.Module):
         input_seq_len = (input_len - 1) * self.seq_len_per_step
         data_output = data_encoded[:, input_seq_len:]  # (bs, output_len*patch_num*patch_num, dim)
 
-        data_output = self.embedder.decode(data_output)  # (bs, output_len, x_num, x_num, data_dim)
+        data_output = self._decode_data(data_output)  # (bs, output_len, x_num, x_num, data_dim)
         return data_output
 
     def setup_cache(self, max_batch_size: int, dtype):
@@ -281,9 +302,7 @@ class BCAT(nn.Module):
 
             # (bs, cur_len, x_num, x_num, data_dim) -> (bs, data_len=cur_len*p*p, dim)
             skip_len = prev_len if self.config.kv_cache else 0
-            cur_data_input = self.embedder.encode(
-                cur_data_input, times[:, :cur_len], skip_len=skip_len
-            )  # (bs, data_len, dim)
+            cur_data_input = self._encode_data(cur_data_input, times[:, :cur_len], skip_len=skip_len)
 
             mask, block_mask = self.prepare_masks(i, kv_len=cur_len * self.seq_len_per_step)
 
@@ -293,7 +312,7 @@ class BCAT(nn.Module):
                 cur_data_encoded = self.transformer(cur_data_input, mask, block_mask=block_mask)  # (bs, data_len, dim)
 
             new_output = cur_data_encoded[:, -self.seq_len_per_step :]  # (bs, patch_num*patch_num, dim)
-            new_output = self.embedder.decode(new_output)  # (bs, 1, x_num, x_num, data_dim)
+            new_output = self._decode_data(new_output)  # (bs, 1, x_num, x_num, data_dim)
 
             new_output = new_output * data_mask  # (bs, 1, x_num, x_num, data_dim)
 
@@ -327,7 +346,7 @@ class BCAT(nn.Module):
         Output:
             data_output:     Tensor     (bs, output_len, x_num, x_num, data_dim)
         """
-        assert input_len == 1
+        torch._assert(input_len == 1, "input_len must be 1 for rollout")
         t_num = times.size(1)
         bs, _, x_num, _, data_dim = data_input.size()
 
@@ -338,12 +357,12 @@ class BCAT(nn.Module):
             cur_data_input = data_all[:, i - input_len : i]  # (bs, 1, x_num, x_num, data_dim)
             cur_data_input, _, mean, std = normalizer(cur_data_input)
 
-            cur_data_input = self.embedder.encode(cur_data_input, times[:, :input_len])  # (bs, data_len, dim)
+            cur_data_input = self._encode_data(cur_data_input, times[:, :input_len])  # (bs, data_len, dim)
 
             mask = None
             cur_data_encoded = self.transformer(cur_data_input, mask)  # (bs, data_len, dim)
 
-            new_output = self.embedder.decode(cur_data_encoded)  # (bs, 1, x_num, x_num, data_dim)
+            new_output = self._decode_data(cur_data_encoded)  # (bs, 1, x_num, x_num, data_dim)
             new_output = new_output * data_mask  # (bs, 1, x_num, x_num, data_dim)
             new_output = new_output * std + mean
 
