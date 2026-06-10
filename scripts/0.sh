@@ -3,13 +3,14 @@ GPUs=0,1
 
 export CUDA_VISIBLE_DEVICES="${GPUs}"
 
-expid=bcat_baseline
+expid=bcat_act_ckpt
 train_args=(
     exp_id=${expid}
     data=arena
     max_epoch=20
     compile=1
     model.flex_attn=1
+    model.act_ckpt=1
 )
 test_args=(
     eval_only=1

@@ -43,3 +43,25 @@ test_args=(
     model.flex_attn=1
     compile=1
 )
+
+expid=bcat_act_ckpt
+train_args=(
+    exp_id=${expid}
+    data=arena
+    max_epoch=20
+    compile=1
+    model.flex_attn=1
+    model.act_ckpt=1
+)
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=${expid}
+    data=arena
+    reload_model=checkpoint/bcat/${expid}
+    batch_size_eval=64
+    model.flex_attn=1
+    compile=1
+)
