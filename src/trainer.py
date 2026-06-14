@@ -137,8 +137,9 @@ class Trainer(object):
                     named_params.extend([(k, p) for k, p in v.named_parameters() if p.requires_grad])
 
                 # parameters containing these will be sent to adam
-                adam_keys = ["embed"]
+                # adam_keys = ["embed"]
                 # adam_keys = ["embedding", "in_proj", "head"]
+                adam_keys = ["embedding", "encoder.conv_in", "decoder.conv_out"]
 
                 muon_params, adam_params = [], []
                 muon_param_count = adam_param_count = 0
