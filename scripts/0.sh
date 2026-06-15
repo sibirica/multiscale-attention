@@ -3,7 +3,7 @@ GPUs=0,1
 
 # export CUDA_VISIBLE_DEVICES="${GPUs}"
 
-expid=bcat_vae2_8_muon
+expid=bcat_vae2_8_muon_2
 train_args=(
     exp_id=${expid}
     data=arena
@@ -36,7 +36,7 @@ torchrun --standalone --nnodes 1 --nproc_per_node 4 src/main.py "${test_args[@]}
 
 sleep 120
 
-expid=bcat_vae2_16_muon
+expid=bcat_vae2_16_muon_2
 train_args=(
     exp_id=${expid}
     data=arena

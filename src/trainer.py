@@ -139,7 +139,8 @@ class Trainer(object):
                 # parameters containing these will be sent to adam
                 # adam_keys = ["embed"]
                 # adam_keys = ["embedding", "in_proj", "head"]
-                adam_keys = ["embedding", "encoder.conv_in", "decoder.conv_out"]
+                # adam_keys = ["embedding", "encoder.conv_in", "decoder.conv_out"]
+                adam_keys = ["embedding"]
 
                 muon_params, adam_params = [], []
                 muon_param_count = adam_param_count = 0
