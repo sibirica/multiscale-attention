@@ -237,6 +237,7 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
         activation: str | Callable[[Tensor], Tensor] = F.relu,
         layer_norm_eps: float = 1e-5,
         norm_first: bool = False,
+        peri_ln: bool = False,
         bias: bool = True,
         device: torch.device | None = None,
         dtype=None,
@@ -261,9 +262,12 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
         self.ffn = FFN(d_model, dim_feedforward, activation, dropout, bias)
 
         self.norm_first = norm_first
+        self.peri_ln = peri_ln
 
-        self.norm1 = norm(d_model, eps=layer_norm_eps, **factory_kwargs)
-        self.norm2 = norm(d_model, eps=layer_norm_eps, **factory_kwargs)
+        self.norm1 = norm(d_model, eps=layer_norm_eps, **factory_kwargs)  # existing pre-self-attention norm
+        self.norm2 = norm(d_model, eps=layer_norm_eps, **factory_kwargs)  # existing pre-FFN norm
+        self.norm_post_attn = norm(d_model, eps=layer_norm_eps, **factory_kwargs) if peri_ln else nn.Identity()  # added for peri-LN attention
+        self.norm_ffn_post = norm(d_model, eps=layer_norm_eps, **factory_kwargs) if peri_ln else nn.Identity()  # added for peri-LN FFN
 
         self.dropout1 = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.dropout2 = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
@@ -293,24 +297,32 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
             check_other=False,
         )
         x = src
-        if self.norm_first:
-            x = x + self._sa_block(
-                self.norm1(x),
-                src_mask,
-                src_key_padding_mask,
-                block_mask=block_mask,
-                is_causal=is_causal,
-                rotary_emb=rotary_emb,
-            )
-            x = x + self.dropout2(self.ffn(self.norm2(x)))
+        if self.norm_first or self.peri_ln:
+            attn_input = self.norm1(x)  # reuse existing norm for peri preprocessing
         else:
-            x = self.norm1(
-                x
-                + self._sa_block(
-                    x, src_mask, src_key_padding_mask, block_mask=block_mask, is_causal=is_causal, rotary_emb=rotary_emb
-                )
-            )
-            x = self.norm2(x + self.dropout2(self.ffn(x)))
+            attn_input = x
+
+        attn_out = self._sa_block(
+            attn_input,
+            src_mask,
+            src_key_padding_mask,
+            block_mask=block_mask,
+            is_causal=is_causal,
+            rotary_emb=rotary_emb,
+        )
+        if self.peri_ln:
+            attn_out = self.norm_post_attn(attn_out)  # peri-LN output normalization
+
+        if self.norm_first or self.peri_ln:
+            x = x + attn_out  # residual add directly when peri or norm_first
+        else:
+            x = self.norm1(x + attn_out)  # existing post-attention norm (norm_first=False baseline)
+        ffn_input = self.norm2(x)
+
+        ffn_output = self.dropout2(self.ffn(ffn_input))
+        if self.peri_ln:
+            ffn_output = self.norm_ffn_post(ffn_output)  # peri-LN addition between FFN and residual
+        x = x + ffn_output
         return x
 
     def _sa_block(

@@ -8,6 +8,7 @@ dropout: 0
 attn_dropout: 0
 n_head: 8
 norm_first: true
+peri_ln: false # when true, apply peri-layer normalization around attention blocks
 positional_embedding: null
 qk_norm: 1
 norm: rms # select from [layer, rms]

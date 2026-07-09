@@ -263,6 +263,7 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         shared_scale_ffn: bool = False,
         disable_slow_scale: bool = False,  ### FLAG FOR DEBUGGING W/O SLOW SCALE
         norm: type[nn.Module] = nn.LayerNorm,
+        peri_ln: bool = False,
     ) -> None:
         super().__init__()
         self.fast_embed_dim = fast_embed_dim
@@ -322,6 +323,13 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         self.norm_slow_attn = norm(slow_embed_dim)
         self.norm_fast_ffn = norm(fast_embed_dim)
         self.norm_slow_ffn = norm(slow_embed_dim)
+        self.peri_ln = peri_ln
+        self.norm_fast_self_attn_out = norm(fast_embed_dim) if peri_ln else nn.Identity()
+        self.norm_fast_cross_attn_out = norm(fast_embed_dim) if peri_ln else nn.Identity()
+        self.norm_slow_self_attn_out = norm(slow_embed_dim) if peri_ln else nn.Identity()
+        self.norm_slow_cross_attn_out = norm(slow_embed_dim) if peri_ln else nn.Identity()
+        self.norm_fast_ffn_post = norm(fast_embed_dim) if peri_ln else nn.Identity()
+        self.norm_slow_ffn_post = norm(slow_embed_dim) if peri_ln else nn.Identity()
 
         if shared_scale_ffn:
             shared_ffn = FFN(fast_embed_dim, dim_ffn, act=act, dropout=dropout)
@@ -330,6 +338,7 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         else:
             self.ffn_fast = FFN(fast_embed_dim, dim_ffn, act=act, dropout=dropout)
             self.ffn_slow = FFN(slow_embed_dim, dim_ffn, act=act, dropout=dropout)
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
     def forward(
         self,
@@ -421,12 +430,29 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         )
 
         # Residual add for attention outputs
-        x_fast = x_f_res + z_f1 + z_f2
-        x_slow = x_s_res + z_s1 + z_s2
+        if self.peri_ln:
+            z_f1 = self.norm_fast_self_attn_out(z_f1)
+            z_f2 = self.norm_fast_cross_attn_out(z_f2)
+            z_s1 = self.norm_slow_self_attn_out(z_s1)
+            z_s2 = self.norm_slow_cross_attn_out(z_s2)
+        attn_fast_out = z_f1 + z_f2
+        attn_slow_out = z_s1 + z_s2
+        fast_attn_residual = x_f_res + attn_fast_out
+        slow_attn_residual = x_s_res + attn_slow_out
 
         # FFN with residual (per stream)
-        x_fast = x_fast + self.ffn_fast(self.norm_fast_ffn(x_fast))
-        x_slow = x_slow + self.ffn_slow(self.norm_slow_ffn(x_slow))
+        fast_ffn_input = self.norm_fast_ffn(fast_attn_residual)
+        slow_ffn_input = self.norm_slow_ffn(slow_attn_residual)
+
+        fast_ffn_out = self.dropout(self.ffn_fast(fast_ffn_input))
+        slow_ffn_out = self.dropout(self.ffn_slow(slow_ffn_input))
+
+        if self.peri_ln:
+            fast_ffn_out = self.norm_fast_ffn_post(fast_ffn_out)
+            slow_ffn_out = self.norm_slow_ffn_post(slow_ffn_out)
+
+        x_fast = fast_attn_residual + fast_ffn_out
+        x_slow = slow_attn_residual + slow_ffn_out
         return x_fast, x_slow
 
     def _apply_self_cross(
@@ -598,7 +624,7 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         if incremental_slow_len == 0:
             kv_cache.set_layer(kv_slot_base + 3)
             self._update_kv_cache_only(self.cross_attn_slow, fast_for_attn, fast_for_attn, kv_cache)
-            slow_after_ffn = slow_incremental_residual
+            slow_attn_residual = slow_incremental_residual
         else:
             # --- Slow self-attention (writes/reads KV slot ``kv_slot_base + 2``). ---
             attn_mask_slow_self = None
@@ -637,12 +663,31 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
                 rotary_emb=None,
                 cache=kv_cache,
             )
-            slow_attn_residual = slow_incremental_residual + attn_delta_slow_self + attn_delta_slow_from_fast
-            slow_after_ffn = slow_attn_residual + self.ffn_slow(self.norm_slow_ffn(slow_attn_residual))
+            if self.peri_ln:
+                attn_delta_slow_self = self.norm_slow_self_attn_out(attn_delta_slow_self)
+                attn_delta_slow_from_fast = self.norm_slow_cross_attn_out(attn_delta_slow_from_fast)
+            slow_attn_out = attn_delta_slow_self + attn_delta_slow_from_fast
+            slow_attn_residual = slow_incremental_residual + slow_attn_out
 
         # Residual + FFN ordering matches ``forward()`` branch on this layer.
-        fast_attn_residual = fast_incremental_residual + attn_delta_fast_self + attn_delta_fast_from_slow
-        fast_after_ffn = fast_attn_residual + self.ffn_fast(self.norm_fast_ffn(fast_attn_residual))
+        if self.peri_ln:
+            attn_delta_fast_self = self.norm_fast_self_attn_out(attn_delta_fast_self)
+            attn_delta_fast_from_slow = self.norm_fast_cross_attn_out(attn_delta_fast_from_slow)
+        fast_attn_out = attn_delta_fast_self + attn_delta_fast_from_slow
+        fast_attn_residual = fast_incremental_residual + fast_attn_out
+
+        fast_ffn_input = self.norm_fast_ffn(fast_attn_residual)
+        fast_ffn_out = self.dropout(self.ffn_fast(fast_ffn_input))
+        if self.peri_ln:
+            fast_ffn_out = self.norm_fast_ffn_post(fast_ffn_out)
+        fast_after_ffn = fast_attn_residual + fast_ffn_out
+
+        slow_ffn_input = self.norm_slow_ffn(slow_attn_residual)
+        slow_ffn_out = self.dropout(self.ffn_slow(slow_ffn_input))
+        if self.peri_ln:
+            slow_ffn_out = self.norm_slow_ffn_post(slow_ffn_out)
+        slow_after_ffn = slow_attn_residual + slow_ffn_out
+
         return fast_after_ffn, slow_after_ffn
 
 
@@ -753,6 +798,7 @@ class RecombineDecoder(Decoder):  ### note: not currently used
         # z_slow_norm = self.norm_slow(z_slow_lift)
         # x = torch.cat([z_fast_norm, z_slow_norm], dim=-1)
         x = torch.cat([z_fast, z_slow_lift], dim=-1)
+        ### NOTE: this uses post-LN norm (https://arxiv.org/pdf/2510.09904)
         x = self.norm_fast(x)
         if self.fc_gate is None:
             y = z_fast + self.fc2(self.dropout(self.activation(self.fc1(x))))
