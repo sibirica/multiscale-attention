@@ -51,6 +51,8 @@ class BCAT_causal(nn.Module):
             "dropout": config.dropout,
             "activation": config.get("activation", "gelu"),
             "norm_first": config.norm_first,
+            "ln_mode": config.get("ln_mode", "pre"),
+            "keel_alpha": config.get("keel_alpha", 2 * config.n_layer),
             "norm": norm,
             "rotary": config.rotary,
             "qk_norm": config.get("qk_norm", False),

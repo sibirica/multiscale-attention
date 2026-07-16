@@ -263,7 +263,8 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         shared_scale_ffn: bool = False,
         disable_slow_scale: bool = False,  ### FLAG FOR DEBUGGING W/O SLOW SCALE
         norm: type[nn.Module] = nn.LayerNorm,
-        peri_ln: bool = False,
+        ln_mode: str = "pre",
+        keel_alpha: float = 1.0,
     ) -> None:
         super().__init__()
         self.fast_embed_dim = fast_embed_dim
@@ -319,17 +320,30 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
             qk_norm=qk_norm,
         )
 
+        if ln_mode not in ("pre", "peri", "keel"):
+            raise ValueError(f"ln_mode must be one of pre|peri|keel, got {ln_mode!r}")
+        self.ln_mode = ln_mode
+        if ln_mode == "keel":
+            self.keel_alpha = nn.Parameter(torch.tensor(float(keel_alpha)))
+        else:
+            self.register_parameter("keel_alpha", None)
+
         self.norm_fast_attn = norm(fast_embed_dim)
         self.norm_slow_attn = norm(slow_embed_dim)
         self.norm_fast_ffn = norm(fast_embed_dim)
         self.norm_slow_ffn = norm(slow_embed_dim)
-        self.peri_ln = peri_ln
-        self.norm_fast_self_attn_out = norm(fast_embed_dim) if peri_ln else nn.Identity()
-        self.norm_fast_cross_attn_out = norm(fast_embed_dim) if peri_ln else nn.Identity()
-        self.norm_slow_self_attn_out = norm(slow_embed_dim) if peri_ln else nn.Identity()
-        self.norm_slow_cross_attn_out = norm(slow_embed_dim) if peri_ln else nn.Identity()
-        self.norm_fast_ffn_post = norm(fast_embed_dim) if peri_ln else nn.Identity()
-        self.norm_slow_ffn_post = norm(slow_embed_dim) if peri_ln else nn.Identity()
+        # peri: LN each attention head output; keel: LN(α·x + sum of head outputs)
+        need_peri_head_norms = ln_mode == "peri"
+        need_keel_post = ln_mode == "keel"
+        self.norm_fast_self_attn_out = norm(fast_embed_dim) if need_peri_head_norms else nn.Identity()
+        self.norm_fast_cross_attn_out = norm(fast_embed_dim) if need_peri_head_norms else nn.Identity()
+        self.norm_slow_self_attn_out = norm(slow_embed_dim) if need_peri_head_norms else nn.Identity()
+        self.norm_slow_cross_attn_out = norm(slow_embed_dim) if need_peri_head_norms else nn.Identity()
+        self.norm_fast_attn_post = norm(fast_embed_dim) if need_keel_post else nn.Identity()
+        self.norm_slow_attn_post = norm(slow_embed_dim) if need_keel_post else nn.Identity()
+        need_ffn_post = ln_mode in ("peri", "keel")
+        self.norm_fast_ffn_post = norm(fast_embed_dim) if need_ffn_post else nn.Identity()
+        self.norm_slow_ffn_post = norm(slow_embed_dim) if need_ffn_post else nn.Identity()
 
         if shared_scale_ffn:
             shared_ffn = FFN(fast_embed_dim, dim_ffn, act=act, dropout=dropout)
@@ -339,6 +353,13 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
             self.ffn_fast = FFN(fast_embed_dim, dim_ffn, act=act, dropout=dropout)
             self.ffn_slow = FFN(slow_embed_dim, dim_ffn, act=act, dropout=dropout)
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+
+    def _residual_add(self, residual: torch.Tensor, module_out: torch.Tensor, post_norm: nn.Module) -> torch.Tensor:
+        if self.ln_mode == "peri":
+            return residual + post_norm(module_out)
+        if self.ln_mode == "keel":
+            return post_norm(self.keel_alpha * residual + module_out)
+        return residual + module_out
 
     def forward(
         self,
@@ -430,15 +451,15 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         )
 
         # Residual add for attention outputs
-        if self.peri_ln:
+        if self.ln_mode == "peri":
             z_f1 = self.norm_fast_self_attn_out(z_f1)
             z_f2 = self.norm_fast_cross_attn_out(z_f2)
             z_s1 = self.norm_slow_self_attn_out(z_s1)
             z_s2 = self.norm_slow_cross_attn_out(z_s2)
         attn_fast_out = z_f1 + z_f2
         attn_slow_out = z_s1 + z_s2
-        fast_attn_residual = x_f_res + attn_fast_out
-        slow_attn_residual = x_s_res + attn_slow_out
+        fast_attn_residual = self._residual_add(x_f_res, attn_fast_out, self.norm_fast_attn_post)
+        slow_attn_residual = self._residual_add(x_s_res, attn_slow_out, self.norm_slow_attn_post)
 
         # FFN with residual (per stream)
         fast_ffn_input = self.norm_fast_ffn(fast_attn_residual)
@@ -447,12 +468,8 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
         fast_ffn_out = self.dropout(self.ffn_fast(fast_ffn_input))
         slow_ffn_out = self.dropout(self.ffn_slow(slow_ffn_input))
 
-        if self.peri_ln:
-            fast_ffn_out = self.norm_fast_ffn_post(fast_ffn_out)
-            slow_ffn_out = self.norm_slow_ffn_post(slow_ffn_out)
-
-        x_fast = fast_attn_residual + fast_ffn_out
-        x_slow = slow_attn_residual + slow_ffn_out
+        x_fast = self._residual_add(fast_attn_residual, fast_ffn_out, self.norm_fast_ffn_post)
+        x_slow = self._residual_add(slow_attn_residual, slow_ffn_out, self.norm_slow_ffn_post)
         return x_fast, x_slow
 
     def _apply_self_cross(
@@ -663,30 +680,26 @@ class TwoScaleTransformerEncoderLayer(nn.Module):
                 rotary_emb=None,
                 cache=kv_cache,
             )
-            if self.peri_ln:
+            if self.ln_mode == "peri":
                 attn_delta_slow_self = self.norm_slow_self_attn_out(attn_delta_slow_self)
                 attn_delta_slow_from_fast = self.norm_slow_cross_attn_out(attn_delta_slow_from_fast)
             slow_attn_out = attn_delta_slow_self + attn_delta_slow_from_fast
-            slow_attn_residual = slow_incremental_residual + slow_attn_out
+            slow_attn_residual = self._residual_add(slow_incremental_residual, slow_attn_out, self.norm_slow_attn_post)
 
         # Residual + FFN ordering matches ``forward()`` branch on this layer.
-        if self.peri_ln:
+        if self.ln_mode == "peri":
             attn_delta_fast_self = self.norm_fast_self_attn_out(attn_delta_fast_self)
             attn_delta_fast_from_slow = self.norm_fast_cross_attn_out(attn_delta_fast_from_slow)
         fast_attn_out = attn_delta_fast_self + attn_delta_fast_from_slow
-        fast_attn_residual = fast_incremental_residual + fast_attn_out
+        fast_attn_residual = self._residual_add(fast_incremental_residual, fast_attn_out, self.norm_fast_attn_post)
 
         fast_ffn_input = self.norm_fast_ffn(fast_attn_residual)
         fast_ffn_out = self.dropout(self.ffn_fast(fast_ffn_input))
-        if self.peri_ln:
-            fast_ffn_out = self.norm_fast_ffn_post(fast_ffn_out)
-        fast_after_ffn = fast_attn_residual + fast_ffn_out
+        fast_after_ffn = self._residual_add(fast_attn_residual, fast_ffn_out, self.norm_fast_ffn_post)
 
         slow_ffn_input = self.norm_slow_ffn(slow_attn_residual)
         slow_ffn_out = self.dropout(self.ffn_slow(slow_ffn_input))
-        if self.peri_ln:
-            slow_ffn_out = self.norm_slow_ffn_post(slow_ffn_out)
-        slow_after_ffn = slow_attn_residual + slow_ffn_out
+        slow_after_ffn = self._residual_add(slow_attn_residual, slow_ffn_out, self.norm_slow_ffn_post)
 
         return fast_after_ffn, slow_after_ffn
 

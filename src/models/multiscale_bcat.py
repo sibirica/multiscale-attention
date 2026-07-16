@@ -453,7 +453,8 @@ class MultiscaleBCAT(nn.Module):
             flex_attn=self.flex_attn,
             shared_scale_ffn=config.get("shared_scale_ffn", False),
             norm=norm,
-            peri_ln=config.get("peri_ln", False),
+            ln_mode=config.get("ln_mode", "pre"),
+            keel_alpha=config.get("keel_alpha", 2 * config.n_layer),
         )
         split_encoder = SplitEncoder(
             embedder=self.embedder,
@@ -659,7 +660,8 @@ class MultiscaleBCAT(nn.Module):
                     fast_to_slow_block_mask = build_fast_to_slow_block_mask_incremental(
                         lf_total=total_fast_tokens,
                         nf_query=incremental_fast_tokens,
-                        slow_time=max_slow_time if self.return_full_cache 
+                        slow_time=max_slow_time
+                        if self.return_full_cache
                         else total_slow_tokens // self.seq_len_per_step,
                         rate=self.rate,
                         spatial_tokens=self.seq_len_per_step,

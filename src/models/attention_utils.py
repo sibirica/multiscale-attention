@@ -225,6 +225,11 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
     """
     Custom implementation of pytorch's TransformerEncoderLayer
     Source: https://pytorch.org/docs/stable/_modules/torch/nn/modules/transformer.html#TransformerEncoderLayer
+
+    ln_mode:
+      pre:  y = x + f(LN(x))
+      peri: y = x + LN(f(LN(x)))
+      keel: y = LN(α·x + f(LN(x)))  (α = keel_alpha)
     """
 
     def __init__(
@@ -237,7 +242,8 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
         activation: str | Callable[[Tensor], Tensor] = F.relu,
         layer_norm_eps: float = 1e-5,
         norm_first: bool = False,
-        peri_ln: bool = False,
+        ln_mode: str = "pre",
+        keel_alpha: float = 1.0,
         bias: bool = True,
         device: torch.device | None = None,
         dtype=None,
@@ -262,15 +268,30 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
         self.ffn = FFN(d_model, dim_feedforward, activation, dropout, bias)
 
         self.norm_first = norm_first
-        self.peri_ln = peri_ln
+        if ln_mode not in ("pre", "peri", "keel"):
+            raise ValueError(f"ln_mode must be one of pre|peri|keel, got {ln_mode!r}")
+        self.ln_mode = ln_mode
+        if ln_mode == "keel":
+            self.keel_alpha = nn.Parameter(torch.tensor(float(keel_alpha), **factory_kwargs))
+        else:
+            self.register_parameter("keel_alpha", None)
 
         self.norm1 = norm(d_model, eps=layer_norm_eps, **factory_kwargs)  # existing pre-self-attention norm
         self.norm2 = norm(d_model, eps=layer_norm_eps, **factory_kwargs)  # existing pre-FFN norm
-        self.norm_post_attn = norm(d_model, eps=layer_norm_eps, **factory_kwargs) if peri_ln else nn.Identity()  # added for peri-LN attention
-        self.norm_ffn_post = norm(d_model, eps=layer_norm_eps, **factory_kwargs) if peri_ln else nn.Identity()  # added for peri-LN FFN
+        # peri: LN(module_out); keel: LN(α·x + module_out)
+        need_post = ln_mode in ("peri", "keel")
+        self.norm_post_attn = norm(d_model, eps=layer_norm_eps, **factory_kwargs) if need_post else nn.Identity()
+        self.norm_ffn_post = norm(d_model, eps=layer_norm_eps, **factory_kwargs) if need_post else nn.Identity()
 
         self.dropout1 = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.dropout2 = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+
+    def _residual_add(self, residual: Tensor, module_out: Tensor, post_norm: nn.Module) -> Tensor:
+        if self.ln_mode == "peri":
+            return residual + post_norm(module_out)
+        if self.ln_mode == "keel":
+            return post_norm(self.keel_alpha * residual + module_out)
+        return residual + module_out
 
     def forward(
         self,
@@ -297,8 +318,9 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
             check_other=False,
         )
         x = src
-        if self.norm_first or self.peri_ln:
-            attn_input = self.norm1(x)  # reuse existing norm for peri preprocessing
+        use_pre_norm = self.norm_first or self.ln_mode in ("peri", "keel")
+        if use_pre_norm:
+            attn_input = self.norm1(x)  # existing pre-attention normalization
         else:
             attn_input = x
 
@@ -310,19 +332,14 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
             is_causal=is_causal,
             rotary_emb=rotary_emb,
         )
-        if self.peri_ln:
-            attn_out = self.norm_post_attn(attn_out)  # peri-LN output normalization
-
-        if self.norm_first or self.peri_ln:
-            x = x + attn_out  # residual add directly when peri or norm_first
+        if use_pre_norm:
+            x = self._residual_add(x, attn_out, self.norm_post_attn)
         else:
-            x = self.norm1(x + attn_out)  # existing post-attention norm (norm_first=False baseline)
-        ffn_input = self.norm2(x)
+            x = self.norm1(x + attn_out)  # existing post-attention residual normalization (baseline)
 
+        ffn_input = self.norm2(x)
         ffn_output = self.dropout2(self.ffn(ffn_input))
-        if self.peri_ln:
-            ffn_output = self.norm_ffn_post(ffn_output)  # peri-LN addition between FFN and residual
-        x = x + ffn_output
+        x = self._residual_add(x, ffn_output, self.norm_ffn_post)
         return x
 
     def _sa_block(
@@ -462,7 +479,7 @@ class CacheCustomTransformerEncoderLayer(CustomTransformerEncoderLayer):
             is_causal = False
 
         x = src
-        x = x + self._sa_block(
+        attn_out = self._sa_block(
             self.norm1(x),
             src_mask,
             src_key_padding_mask,
@@ -471,7 +488,9 @@ class CacheCustomTransformerEncoderLayer(CustomTransformerEncoderLayer):
             rotary_emb=rotary_emb,
             cache=cache,
         )
-        x = x + self.dropout2(self.ffn(self.norm2(x)))
+        x = self._residual_add(x, attn_out, self.norm_post_attn)
+        ffn_out = self.dropout2(self.ffn(self.norm2(x)))
+        x = self._residual_add(x, ffn_out, self.norm_ffn_post)
 
         return x
 

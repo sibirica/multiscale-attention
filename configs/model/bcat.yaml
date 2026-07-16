@@ -8,7 +8,12 @@ dropout: 0
 attn_dropout: 0
 n_head: 8
 norm_first: true
-peri_ln: false # when true, apply peri-layer normalization around attention blocks
+# Residual LN mode: pre | peri | keel
+#   pre:  y = x + f(LN(x))
+#   peri: y = x + LN(f(LN(x)))
+#   keel: y = LN(α·x + f(LN(x)))  (α = keel_alpha)
+ln_mode: keel
+keel_alpha: 12  # typically 2 * n_layer
 positional_embedding: null
 qk_norm: 1
 norm: rms # select from [layer, rms]
