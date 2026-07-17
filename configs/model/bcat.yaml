@@ -1,9 +1,9 @@
 name: bcat_auto
 
 # shared attributes
-n_layer: 6
-dim_emb: 512
-dim_ffn: 1216
+n_layer: 6 # 11
+dim_emb: 512 # 1024
+dim_ffn: 1216 # 2752
 dropout: 0
 attn_dropout: 0
 n_head: 8
@@ -27,20 +27,16 @@ flex_attn: 1
 act_ckpt: 0 # activation checkpointing
 kv_cache: 1
 
-patch_num: 16 # for input, number of patches per dimension
-patch_num_output: ${.patch_num} # for output, number of patches per dimension
-
 embedder:
-    # choose from [linear, conv, overlap_linear] 
-    type: conv
+    type: vae
     dim: ${..dim_emb}
-    patch_num: ${..patch_num}
-    patch_num_output: ${..patch_num_output}
 
     time_embed: learnable # select from continuous and learnable
     max_time_len: 50
 
-    conv_dim: 32
-    early_conv: 0
-
-    deep: 0
+    # For 128x128 frames, ratios 8/16/32 give 16x16, 8x8, and 4x4 token grids.
+    compression_ratio: 8
+    hidden_dim: 64
+    max_hidden_dim: 256
+    num_res_blocks: 1
+    activation: silu

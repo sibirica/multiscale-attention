@@ -1,3 +1,5 @@
-GPU=1
-GPUs=0,1
+GPU=2
+GPUs=2,3
+
+export CUDA_VISIBLE_DEVICES="${GPUs}"
 

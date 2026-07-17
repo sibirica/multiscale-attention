@@ -43,3 +43,307 @@ test_args=(
     model.flex_attn=1
     compile=1
 )
+
+expid=bcat_act_ckpt
+train_args=(
+    exp_id=${expid}
+    data=arena
+    max_epoch=20
+    compile=1
+    model.flex_attn=1
+    model.act_ckpt=1
+)
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=${expid}
+    data=arena
+    reload_model=checkpoint/bcat/${expid}
+    batch_size_eval=64
+    model.flex_attn=1
+    compile=1
+)
+
+expid=bcat_vae_8
+train_args=(
+    exp_id=${expid}
+    data=arena
+    max_epoch=20
+    compile=1
+    model.flex_attn=1
+    model.embedder.compression_ratio=8
+    model.embedder.num_res_blocks=1
+)
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=${expid}
+    data=arena
+    reload_model=checkpoint/bcat/${expid}
+    batch_size_eval=64
+    compile=1
+    model.flex_attn=1
+    model.embedder.compression_ratio=8
+    model.embedder.num_res_blocks=1
+)
+
+expid=bcat_vae_16
+train_args=(
+    exp_id=${expid}
+    data=arena
+    max_epoch=20
+    compile=1
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=16
+    model.embedder.num_res_blocks=2
+)
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=${expid}
+    data=arena
+    reload_model=checkpoint/bcat/${expid}
+    batch_size_eval=64
+    compile=1
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=16
+    model.embedder.num_res_blocks=2
+)
+
+expid=bcat_vae_32
+train_args=(
+    exp_id=${expid}
+    data=arena
+    max_epoch=20
+    compile=1
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=32
+    model.embedder.num_res_blocks=2
+)
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=${expid}
+    data=arena
+    reload_model=checkpoint/bcat/${expid}
+    batch_size_eval=64
+    compile=1
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=32
+    model.embedder.num_res_blocks=2
+)
+
+# 4 gpu
+expid=bcat_vae2_8
+train_args=(
+    exp_id=${expid}
+    data=arena
+    max_epoch=20
+    compile=1
+    batch_size=16
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=8
+    model.embedder.num_res_blocks=2
+)
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=${expid}
+    data=arena
+    reload_model=checkpoint/bcat/${expid}
+    batch_size_eval=64
+    compile=1
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=8
+    model.embedder.num_res_blocks=2
+)
+
+# 4 gpu
+expid=bcat_vae2_16
+train_args=(
+    exp_id=${expid}
+    data=arena
+    max_epoch=20
+    compile=1
+    batch_size=16
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=16
+    model.embedder.num_res_blocks=2
+)
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=${expid}
+    data=arena
+    reload_model=checkpoint/bcat/${expid}
+    batch_size_eval=64
+    compile=1
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=16
+    model.embedder.num_res_blocks=2
+)
+
+# 4 gpu
+expid=bcat_vae2_32
+train_args=(
+    exp_id=${expid}
+    data=arena
+    max_epoch=20
+    compile=1
+    batch_size=16
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=32
+    model.embedder.num_res_blocks=2
+)
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=${expid}
+    data=arena
+    reload_model=checkpoint/bcat/${expid}
+    batch_size_eval=64
+    compile=1
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=32
+    model.embedder.num_res_blocks=2
+)
+
+# optimize vae with muon
+
+expid=bcat_vae2_8_muon
+train_args=(
+    exp_id=${expid}
+    data=arena
+    max_epoch=20
+    compile=1
+    batch_size=16
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=8
+    model.embedder.num_res_blocks=2
+)
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=${expid}
+    data=arena
+    reload_model=checkpoint/bcat/${expid}
+    batch_size_eval=64
+    compile=1
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=8
+    model.embedder.num_res_blocks=2
+)
+
+expid=bcat_vae2_16_muon
+train_args=(
+    exp_id=${expid}
+    data=arena
+    max_epoch=20
+    compile=1
+    batch_size=16
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=16
+    model.embedder.num_res_blocks=2
+)
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=${expid}
+    data=arena
+    reload_model=checkpoint/bcat/${expid}
+    batch_size_eval=64
+    compile=1
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=16
+    model.embedder.num_res_blocks=2
+)
+
+# optimize more vae with muon
+
+expid=bcat_vae2_8_muon_2
+train_args=(
+    exp_id=${expid}
+    data=arena
+    max_epoch=20
+    compile=1
+    batch_size=16
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=8
+    model.embedder.num_res_blocks=2
+)
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=${expid}
+    data=arena
+    reload_model=checkpoint/bcat/${expid}
+    batch_size_eval=64
+    compile=1
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=8
+    model.embedder.num_res_blocks=2
+)
+
+expid=bcat_vae2_16_muon_2
+train_args=(
+    exp_id=${expid}
+    data=arena
+    max_epoch=20
+    compile=1
+    batch_size=16
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=16
+    model.embedder.num_res_blocks=2
+)
+test_args=(
+    eval_only=1
+    use_wandb=0
+    log_eval_plots=-1
+    exp_name=eval
+    exp_id=${expid}
+    data=arena
+    reload_model=checkpoint/bcat/${expid}
+    batch_size_eval=64
+    compile=1
+    model.flex_attn=1
+    model.n_layer=12
+    model.embedder.compression_ratio=16
+    model.embedder.num_res_blocks=2
+)

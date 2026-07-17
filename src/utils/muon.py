@@ -91,7 +91,7 @@ class Muon(torch.optim.Optimizer):
         # Sort parameters into those for which we will use Muon, and those for which we will not
         for p in muon_params:
             # Use Muon for every parameter in muon_params which is >= 2D and doesn't look like an embedding or head layer
-            assert p.ndim == 2 or p.ndim == 4, p.ndim
+            assert p.ndim == 2 or p.ndim == 3 or p.ndim == 4, p.ndim
             self.state[p]["use_muon"] = True
         for p in adamw_params:
             # Do not use Muon for parameters in adamw_params
