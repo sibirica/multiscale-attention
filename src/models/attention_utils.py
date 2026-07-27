@@ -24,6 +24,11 @@ from models.checkpoint_wrapper import checkpoint_wrapper
 N_MAX_POSITIONS = 4096  # maximum input sequence length
 flex_attn_compiled = torch.compile(flex_attention)
 
+
+def _next_power_of_2(n: int) -> int:
+    return 1 << (n - 1).bit_length()
+
+
 """
 --------------- Attention Variants ---------------
 """
@@ -164,6 +169,12 @@ class MultiheadFlexAttention(MultiheadAttention):
     ):
         super().__init__(embed_dim, num_heads, dropout, bias, qk_norm)
 
+        # flex_attention's Triton kernel requires the head dim to be a power of 2.
+        # Pad q/k/v with zeros up to the next power of 2 (exact: zeros do not affect
+        # scores or the weighted-sum output) and keep the softmax scale on the true dim.
+        self.padded_head_dim = _next_power_of_2(self.head_dim)
+        self.attn_scale = self.head_dim**-0.5
+
         if logit_softcap > 0:
             from .softcapping import generate_tanh_softcap
 
@@ -213,9 +224,18 @@ class MultiheadFlexAttention(MultiheadAttention):
             k, v = cache.update(k, v)
             k_len = k.size(2)
 
+        if self.padded_head_dim != self.head_dim:
+            pad = self.padded_head_dim - self.head_dim
+            q = F.pad(q, (0, pad))
+            k = F.pad(k, (0, pad))
+            v = F.pad(v, (0, pad))
+
         output = flex_attn_compiled(
-            q, k, v, block_mask=block_mask, score_mod=self.score_mod
-        )  # (bs, n_heads, seq_len, head_dim)
+            q, k, v, block_mask=block_mask, score_mod=self.score_mod, scale=self.attn_scale
+        )  # (bs, n_heads, seq_len, padded_head_dim)
+
+        if self.padded_head_dim != self.head_dim:
+            output = output[..., : self.head_dim]
 
         output = output.transpose(1, 2).contiguous().view(bs, seq_len, -1)
         return self.out_proj(output)

@@ -173,4 +173,5 @@ wandb/
 artifacts/
 
 # VSCode
+*.code-workspace
 .vscode/

@@ -1,5 +1,25 @@
 # Progress
 
+## Multiscale VAE Embedder Wiring
+
+### Objective
+Wire MultiscaleBCAT to the VAE embedder with the same encode/pos-emb/flatten and decode/unflatten contract used by BCAT, so `multiscale_vae.sh` can train with `model=multiscale_bcat`.
+
+### Task List
+- [x] Add a flat VAE adapter (structured VAE latents + `STPositionalEmbedding` ↔ flat token sequences).
+- [x] Wire MultiscaleBCAT construction to use VAE when `embedder.type=vae`, derive `patch_num`/`seq_len_per_step` from the embedder.
+- [x] Update `multiscale_bcat.yaml` with VAE embedder fields.
+- [x] Keep conv embedder path working for existing multiscale tests.
+- [x] Run focused shape / ruff checks.
+
+### Current Focus
+Done.
+
+### Notes & Blockers
+Added `FlatVAEEmbedder` in `vae.py` so `SplitEncoder` / `FastOnlyRecombineDecoder` keep the ConvEmbedder flat `(b, t·p·p, d)` API. Helper-level encode/pool/decode + skip_len checks passed on CPU; full dense fwd assumes CUDA/CUDNN. `ruff format`/`ruff check` pass on touched Python files.
+
+---
+
 ## Multiscale KV Cache Cleanup
 
 ### Objective

@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from einops import rearrange
 
 from .attention_utils import get_activation
+from .embedder import STPositionalEmbedding
 
 
 class HunyuanConv2d(nn.Module):
@@ -412,3 +413,25 @@ class VAEEmbedder(nn.Module):
         data_output = rearrange(data_output, "b t h w d -> (b t) d h w")
         data_output = self.decoder(data_output)
         return rearrange(data_output, "(b t) c h w -> b t h w c", b=bs)
+
+
+class FlatVAEEmbedder(nn.Module):
+    """VAE + space-time pos emb with ConvEmbedder-compatible flat encode/decode."""
+
+    def __init__(self, config, x_num: int, data_dim: int):
+        super().__init__()
+        self.vae = VAEEmbedder(config, x_num, data_dim)
+        self.patch_num = self.vae.patch_num
+        self.dim = config.dim
+        self.positional_embedding = STPositionalEmbedding(self.patch_num, config.max_time_len, self.dim)
+
+    def encode(self, data: torch.Tensor, times: torch.Tensor, skip_len: int = 0) -> torch.Tensor:
+        """Encode frames to flat tokens `(bs, (t-skip_len)*ph*pw, dim)`."""
+        data = self.vae.encode(data, skip_len=skip_len)
+        data = self.positional_embedding(data, times, skip_len=skip_len)
+        return data.reshape(data.size(0), -1, self.dim)
+
+    def decode(self, data_output: torch.Tensor) -> torch.Tensor:
+        """Decode flat tokens `(bs, t*ph*pw, dim)` back to frames."""
+        data_output = data_output.reshape(data_output.size(0), -1, self.patch_num, self.patch_num, self.dim)
+        return self.vae.decode(data_output)

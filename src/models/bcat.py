@@ -8,6 +8,7 @@ from typing import Callable
 
 import torch
 import torch.nn as nn
+from omegaconf import open_dict
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.attention.flex_attention import create_block_mask
 
@@ -18,9 +19,9 @@ from .attention_utils import (
     CacheCustomTransformerEncoderLayer,
     DynamicTanh,
 )
-from .embedder import STPositionalEmbedding, get_embedder
+from .embedder import get_embedder
 from .kv_cache import KVCache
-from .vae import VAEEmbedder
+from .vae import FlatVAEEmbedder
 
 
 logger = getLogger()
@@ -57,13 +58,17 @@ class BCAT(nn.Module):
         self.x_num = x_num
         self.max_output_dim = max_output_dim
 
-        assert config.embedder.type == "vae"
-        self.embedder = VAEEmbedder(config.embedder, x_num, max_output_dim)
-        # self.embedder = get_embedder(config.embedder, x_num, max_output_dim)
-
-        self.patch_num = self.embedder.patch_num
+        # patch_num is derived from compression_ratio (the per-dimension patch
+        # resolution) so a single knob controls the token grid for all embedders.
+        self.patch_num = x_num // config.embedder.compression_ratio
+        if config.embedder.type == "vae":
+            self.embedder = FlatVAEEmbedder(config.embedder, x_num, max_output_dim)
+        else:
+            with open_dict(config.embedder):
+                config.embedder.patch_num = self.patch_num
+                config.embedder.patch_num_output = self.patch_num
+            self.embedder = get_embedder(config.embedder, x_num, max_output_dim)
         self.seq_len_per_step = self.patch_num**2
-        self.positional_embedding = STPositionalEmbedding(self.patch_num, config.embedder.max_time_len, config.dim_emb)
 
         self.flex_attn = config.get("flex_attn", False)
 
@@ -124,8 +129,7 @@ class BCAT(nn.Module):
 
     def summary(self):
         s = "\n"
-        s += f"\tVAE Embedder:    {sum([p.numel() for p in self.embedder.parameters() if p.requires_grad]):,}\n"
-        s += f"\tPos Emb:         {sum(p.numel() for p in self.positional_embedding.parameters() if p.requires_grad):,}\n"
+        s += f"\tEmbedder:        {sum([p.numel() for p in self.embedder.parameters() if p.requires_grad]):,}\n"
         s += f"\tTransformer:     {sum([p.numel() for p in self.transformer.parameters() if p.requires_grad]):,}"
         return s
 
@@ -152,16 +156,11 @@ class BCAT(nn.Module):
 
     def _encode_data(self, data: torch.Tensor, times: torch.Tensor, skip_len: int = 0) -> torch.Tensor:
         # (b, t, h, w, d) -> (b, (t-skip_len)*ph*pw, d)
-        data = self.embedder.encode(data, skip_len=skip_len)
-        data = self.positional_embedding(data, times, skip_len=skip_len)
-        data = data.reshape(data.size(0), -1, self.config.dim_emb)
-        return data
+        return self.embedder.encode(data, times, skip_len=skip_len)
 
     def _decode_data(self, data: torch.Tensor) -> torch.Tensor:
         # (b, t*ph*pw, d) -> (b, t, h, w, d)
-        data = data.reshape(data.size(0), -1, self.patch_num, self.patch_num, self.config.dim_emb)
-        data = self.embedder.decode(data)
-        return data
+        return self.embedder.decode(data)
 
     def fwd(self, data: torch.Tensor, times: torch.Tensor, input_len: int, **kwargs):
         """

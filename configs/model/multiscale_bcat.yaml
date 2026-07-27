@@ -2,9 +2,9 @@ name: multiscale_bcat_auto
 
 # shared attributes
 n_layer: 6 # 12
-dim_emb: 448 # 640 # 1024 # fast embedding dimension
+dim_emb: 512 # 768 # 448 # 640 # 1024 # fast embedding dimension
 slow_dim: ${.dim_emb}
-dim_ffn: 1152 # 1664 # 2752
+dim_ffn: 1312 # 1984 # 1152 # 1664 # 2752
 pool_dim: ${.dim_ffn} # hidden layer size of slow layer encoding ffn
 dropout: 0
 attn_dropout: 0
@@ -15,7 +15,7 @@ norm_first: true
 #   peri: y = x + LN(f(LN(x)))  (each self/cross head normalized separately before sum)
 #   keel: y = LN(α·x + f(LN(x)))  (α = keel_alpha)
 ln_mode: keel
-keel_alpha: 12  # typically 2 * n_layer
+keel_alpha: 12  # typically 2 * n_layer (# of layers)
 positional_embedding: null
 qk_norm: 1
 norm: layer # select from [layer, rms]
@@ -41,20 +41,25 @@ log_recombine_norms: 0
 log_recombine_norms_mode: always # choose from [inference, always]
 log_once: 1
 
-patch_num: 16 #8 # for input, number of patches per dimension
-patch_num_output: ${.patch_num} # for output, number of patches per dimension
-
 embedder:
-    # choose from [linear, conv, overlap_linear]
-    type: conv
+    # choose from [linear, conv, overlap_linear, vae]
+    type: conv # vae
     dim: ${..dim_emb}
-    patch_num: ${..patch_num}
-    patch_num_output: ${..patch_num_output}
 
     time_embed: learnable # select from continuous and learnable
     max_time_len: 50 # 100 # (switched with length of dataset, previously 20)
 
+    # patch_num (per-dimension token grid) is derived from compression_ratio for
+    # every embedder type. For 128x128 frames, ratios 8/16/32 give 16x16, 8x8, 4x4 grids (8x8/16x16/32x32 patches).
+    compression_ratio: 16 # 8
+
+    # conv / linear / overlap_linear embedders (ignored when type=vae)
     conv_dim: 32
     early_conv: 0
-
     deep: 0
+
+    # vae embedder (ignored otherwise)
+    hidden_dim: 64
+    max_hidden_dim: 256
+    num_res_blocks: 1
+    activation: silu

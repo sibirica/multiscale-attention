@@ -8,12 +8,14 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+from omegaconf import open_dict
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.attention.flex_attention import create_block_mask
 
 from .attention_utils import DynamicTanh
 from .bcat import block_causal
 from .embedder import get_embedder
+from .kv_cache import KVCache
 from .multiscale_utils import (
     FastOnlyRecombineDecoder,
     PoolFFN,
@@ -22,7 +24,7 @@ from .multiscale_utils import (
     TwoScaleTransformerEncoderLayer,
     pool,
 )
-from .kv_cache import KVCache
+from .vae import FlatVAEEmbedder
 
 
 def build_self_attn_mask(
@@ -399,7 +401,17 @@ class MultiscaleBCAT(nn.Module):
         if self.rate <= 0:
             raise ValueError(f"rate must be positive, got {self.rate}")
 
-        self.embedder = get_embedder(config.embedder, x_num, max_output_dim)
+        # patch_num is derived from compression_ratio (the per-dimension patch
+        # resolution) so a single knob controls the token grid for all embedders.
+        self.patch_num = x_num // config.embedder.compression_ratio
+        if config.embedder.type == "vae":
+            self.embedder = FlatVAEEmbedder(config.embedder, x_num, max_output_dim)
+        else:
+            with open_dict(config.embedder):
+                config.embedder.patch_num = self.patch_num
+                config.embedder.patch_num_output = self.patch_num
+            self.embedder = get_embedder(config.embedder, x_num, max_output_dim)
+        self.seq_len_per_step = self.patch_num**2
         self.flex_attn = config.get("flex_attn", False)
 
         if config.get("kv_cache", False) and config.get("rotary", False):
@@ -460,7 +472,7 @@ class MultiscaleBCAT(nn.Module):
             embedder=self.embedder,
             rate=self.rate,
             pool_ffn=pool_ffn,
-            spatial_tokens=config.embedder.patch_num**2,
+            spatial_tokens=self.seq_len_per_step,
         )
         decoder = FastOnlyRecombineDecoder(
             fast_embed_dim=fast_embed_dim,
@@ -479,8 +491,6 @@ class MultiscaleBCAT(nn.Module):
         self._compiled_transformer_gen = self._transformer_flex_uncompiled
         self._compiled_kv_rollout = self.transformer.forward_rollout_kv_cache
         self.return_full_cache = False
-
-        self.seq_len_per_step = config.embedder.patch_num**2
         self.max_fast_time = max(1, max_data_len - 1)
         self.max_slow_time = max(1, self.max_fast_time // self.rate)
         self.register_buffer(
