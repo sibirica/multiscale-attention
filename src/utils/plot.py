@@ -30,6 +30,7 @@ def plot_2d_pde(
     output_plot_len=-1,
     dim=-1,
     temporal_stride=1,
+    output_steps=None,
 ):
     """
     output:     (output_len, x_num, x_num, data_dim)
@@ -43,10 +44,15 @@ def plot_2d_pde(
 
     if input_plot_len < 0:
         input_plot_len = input_len
-    if output_plot_len < 0:
-        output_plot_len = output_len
-    temporal_stride = max(1, int(temporal_stride))
-    output_indices = list(range(output_len - output_plot_len, output_len, temporal_stride))
+    if output_steps is None:
+        if output_plot_len < 0:
+            output_plot_len = output_len
+        temporal_stride = max(1, int(temporal_stride))
+        output_indices = list(range(output_len - output_plot_len, output_len, temporal_stride))
+    else:
+        output_indices = sorted({int(step) - 1 for step in output_steps if 1 <= int(step) <= output_len})
+        if not output_indices:
+            output_indices = [output_len - 1]
     # if (output_len - 1) not in output_indices:
     #     output_indices.append(output_len - 1)
 

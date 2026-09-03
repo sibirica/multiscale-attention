@@ -25,6 +25,7 @@ DatasetIdx = {
     "incom_ns_arena_u": 5,
     "cfdbench": 6,
     "fno": 7,
+    "jax_cfd": 8,
 }
 
 
@@ -152,6 +153,8 @@ class myIterDp(IterDataPipe):
         start_limit = self.params.data.random_start.start_max
         if start_limit > 0:
             data_limit = min(data_limit, start_limit)
+        elif start_limit < 0:
+            data_limit = min(data_limit, max_len + start_limit)
         if data_limit <= 0:
             return 0
         else:
@@ -1049,3 +1052,172 @@ class FNO2D(myIterDp):
                         # d["symbol_input"] = self.symbol_ids
 
                     yield d
+
+
+class JaxCFD2D(myIterDp):
+    """
+    JAX-CFD forced hyperviscous 2D vorticity dataset.
+
+    Raw dataset structure:
+    forced_hyper_chain/trajectories/trajectory_*/data_id000_*.nc
+        w: (x_num, x_num)
+        x: (x_num,)
+        y: (x_num,)
+
+    Consolidated dataset structure:
+    forced_hyper_chain/trajectories_128/trajectory_*.h5
+        w: (t_num_raw, x_num, x_num)
+        t: (t_num_raw,)
+    """
+
+    def __init__(self, params, symbol_env, split: str = "train", train: bool = True) -> None:
+        super().__init__(params, symbol_env, split, train)
+
+        self.type_label = "jax_cfd"
+        data_params = params.data.jax_cfd
+
+        self.t_step = data_params.t_step
+        self.source_x_num = data_params.x_num
+        self.variable = data_params.variable
+        self.folder = data_params.folder
+        self.trajectory_folder = os.path.join(self.folder, data_params.trajectory_dir)
+        self.consolidated_folder = os.path.join(self.folder, data_params.consolidated_dir)
+        self.fully_shuffled = True
+        self.use_consolidated = False
+
+        raw_files = []
+        if os.path.isdir(self.trajectory_folder):
+            raw_files = sorted(
+                [
+                    os.path.join(self.trajectory_folder, f)
+                    for f in os.listdir(self.trajectory_folder)
+                    if f.startswith("trajectory_") and os.path.isdir(os.path.join(self.trajectory_folder, f))
+                ]
+            )
+
+        if data_params.prefer_consolidated and os.path.isdir(self.consolidated_folder):
+            consolidated_files = sorted(
+                [
+                    os.path.join(self.consolidated_folder, f)
+                    for f in os.listdir(self.consolidated_folder)
+                    if f.startswith("trajectory_") and f.endswith(".h5")
+                ]
+            )
+            self.use_consolidated = len(consolidated_files) > 0 and (
+                len(raw_files) == 0 or len(consolidated_files) == len(raw_files)
+            )
+
+        if self.use_consolidated:
+            self.data_files = consolidated_files
+        else:
+            self.data_files = raw_files
+
+        if self.params.symbol.symbol_input:
+            tree = self.symbol_env.generator.get_tree(self.type_label)
+            tree_encoded = self.symbol_env.equation_encoder.encode(tree)
+            symbol_input = self.symbol_env.word_to_idx([tree_encoded], float_input=False)[0]
+            self.symbol_ids = symbol_input
+
+        if not self.params.data.tie_fields:
+            self.c_mask = torch.Tensor(data_params.c_mask)
+            self.c_mask_bool = self.c_mask.bool()
+
+    def _read_raw_frame(self, data_path: str) -> tuple[np.ndarray, float, float]:
+        with h5py.File(data_path, "r") as hf:
+            frame = hf[self.variable]
+            if frame.shape[0] % self.x_num == 0 and frame.shape[1] % self.x_num == 0:
+                x_step = frame.shape[0] // self.x_num
+                y_step = frame.shape[1] // self.x_num
+                data = frame[::x_step, ::y_step]
+            else:
+                data = frame[()]
+
+            dt = float(np.asarray(hf.attrs["dt"]).reshape(-1)[0])
+            start_time = float(np.asarray(hf.attrs.get("start_time", 0.0)).reshape(-1)[0])
+
+        return data, dt, start_time
+
+    def _resize_data(self, data: np.ndarray) -> np.ndarray:
+        if data.shape[1:3] == (self.x_num, self.x_num):
+            return data[..., None]
+
+        return (
+            F.interpolate(
+                torch.from_numpy(data).float()[:, None],
+                size=(self.x_num, self.x_num),
+                mode="bilinear",
+                align_corners=True,
+            )
+            .permute(0, 2, 3, 1)
+            .numpy()
+        )
+
+    def _build_sample(self, data: np.ndarray, times: np.ndarray | list[float]) -> dict[str, torch.Tensor]:
+        data = self._resize_data(data)
+        data = self.augment_data(data)
+        data = torch.from_numpy(data).float()
+
+        d = {}
+
+        if not self.params.data.tie_fields:
+            d["data_mask"] = self.c_mask
+            nt, nx, ny, _ = data.size()
+            tmp = torch.zeros(nt, nx, ny, self.params.data.max_output_dimension, dtype=data.dtype)
+            tmp[..., self.c_mask_bool] = data
+            data = tmp
+
+        d["data"] = data
+
+        if self.params.use_raw_time:
+            d["t"] = torch.as_tensor(times, dtype=torch.float32)
+
+        if self.params.symbol.symbol_input:
+            d["symbol_input"] = self.symbol_ids
+
+        return d
+
+    def _read_consolidated_sample(self, trajectory_path: str) -> tuple[np.ndarray, np.ndarray]:
+        with h5py.File(trajectory_path, "r") as hf:
+            max_len = hf[self.variable].shape[0]
+            t0 = self.sample_initial_time(max_len) if self.random_start else 0
+
+            if self.t_step == 1:
+                frame_slice = slice(t0, t0 + self.t_num)
+                data = hf[self.variable][frame_slice]
+                times = hf["t"][frame_slice] if "t" in hf else np.arange(t0, t0 + self.t_num)
+            else:
+                frame_indices = np.arange(t0, t0 + self.t_num * self.t_step, self.t_step)
+                data = hf[self.variable][frame_indices]
+                times = hf["t"][frame_indices] if "t" in hf else frame_indices
+
+        return data, times
+
+    def _read_raw_sample(self, trajectory_path: str) -> tuple[np.ndarray, list[float]]:
+        frames = sorted([f for f in os.listdir(trajectory_path) if f.endswith(".nc")])
+        t0 = self.sample_initial_time(len(frames)) if self.random_start else 0
+        frame_indices = np.arange(t0, t0 + self.t_num * self.t_step, self.t_step)
+
+        data = []
+        times = []
+        for frame_idx in frame_indices:
+            frame, dt, start_time = self._read_raw_frame(os.path.join(trajectory_path, frames[frame_idx]))
+            data.append(frame)
+            times.append(start_time + (frame_idx + 1) * dt)
+
+        return np.stack(data, axis=0), times
+
+    def __iter__(self):
+        self.init_rng()
+        iter_range = self.get_iter_range(len(self.data_files))[self.local_rank :: self.n_gpu_per_node]
+
+        if self.train:
+            iter_range = self.rng.permutation(iter_range)
+
+        for trajectory_idx in iter_range:
+            trajectory_path = self.data_files[trajectory_idx]
+            if self.use_consolidated:
+                data, times = self._read_consolidated_sample(trajectory_path)
+            else:
+                data, times = self._read_raw_sample(trajectory_path)
+
+            yield self._build_sample(data, times)

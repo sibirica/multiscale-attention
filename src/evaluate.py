@@ -119,9 +119,11 @@ class Evaluator(object):
         if params.eval_only or self.trainer.epoch == params.max_epoch - 1:
             # plot everything during testing and last epoch
             input_plot_len = output_plot_len = -1
+            output_plot_steps = None
         else:
             input_plot_len = 1
-            output_plot_len = min(2, self.output_len)
+            output_plot_len = -1
+            output_plot_steps = params.eval_plot_steps
 
         all_results = {}
         more_metrics = []
@@ -289,6 +291,7 @@ class Evaluator(object):
                         output_plot_len=output_plot_len,
                         dim=params.data[type.split(":")[0]].dim,
                         temporal_stride=max(1, int(params.get("eval_plot_temporal_stride", 1))),
+                        output_steps=output_plot_steps,
                     )
 
                     if params.use_wandb:

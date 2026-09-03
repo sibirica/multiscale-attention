@@ -2,9 +2,9 @@ name: multiscale_bcat_auto
 
 # shared attributes
 n_layer: 6 # 12
-dim_emb: 512 # 768 # 448 # 640 # 1024 # fast embedding dimension
+dim_emb: 512 # 256 # 768 # 448 # 640 # 1024 # fast embedding dimension
 slow_dim: ${.dim_emb}
-dim_ffn: 1312 # 1984 # 1152 # 1664 # 2752
+dim_ffn: 1312 # 640 # 1984 # 1152 # 1664 # 2752
 pool_dim: ${.dim_ffn} # hidden layer size of slow layer encoding ffn
 dropout: 0
 attn_dropout: 0
@@ -25,7 +25,7 @@ rotary: 0
 
 flex_attn: 1
 kv_cache: 1
-rate: 10 # 2
+rate: 5 # 2
 shared_scale_ffn: 0 # if 1, fast/slow streams in each layer use the same FFN weights
 
 # Optional sliding-window restriction on the attention masks.
@@ -51,7 +51,7 @@ embedder:
 
     # patch_num (per-dimension token grid) is derived from compression_ratio for
     # every embedder type. For 128x128 frames, ratios 8/16/32 give 16x16, 8x8, 4x4 grids (8x8/16x16/32x32 patches).
-    compression_ratio: 16 # 8
+    compression_ratio: 8 # 16
 
     # conv / linear / overlap_linear embedders (ignored when type=vae)
     conv_dim: 32

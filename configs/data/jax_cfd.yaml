@@ -1,8 +1,8 @@
-types: [incom_ns_arena]
+types: [jax_cfd]
 
-max_output_dimension: 4
+max_output_dimension: 1
 train_val_test_ratio: [0.8, 0.1, 0.1]
-t_num: 50 # up to 56 (length of dataset)
+t_num: 50
 x_num: 128 # how many to use for model input
 
 mixed_length: 0 # 0 means all have same length, otherwise, pad to t_num
@@ -11,20 +11,24 @@ random_start: # randomly select the time starting idx
   train: true
   val: false
   test: false
-  start_max: 40
+  start_max: -10
 
 # whether to share all channels among equations or use c_mask
 tie_fields: 1
 
 sampler:
   uniform: 1
-  
-  # when uniform=1, the following will be ignored. Otherwise, the probabilities will be normalized
-  incom_ns_arena: 1
 
-incom_ns_arena:
-  folder: /data/shared/dataset/pdearena/NavierStokes-2D-conditioned
+  # when uniform=1, the following will be ignored. Otherwise, the probabilities will be normalized
+  jax_cfd: 1
+
+jax_cfd:
+  folder: /data/shared/jax_cfd/forced_hyper_chain
+  trajectory_dir: trajectories
+  consolidated_dir: trajectories_128
+  prefer_consolidated: true
+  variable: w
   t_step: 1
-  x_num: 128
-  dim: 3
-  c_mask: [1, 1, 1, 0, 0, 0]
+  x_num: 512
+  dim: 1
+  c_mask: [1]

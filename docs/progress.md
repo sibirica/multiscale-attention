@@ -102,3 +102,50 @@ Implementation complete and validated.
 
 ### Notes & Blockers
 Key decisions (per user): 2D frame-independent (input `(b t) d h w`, all temporal components removed); deterministic autoencoder (no Gaussian sampling/KL). Channel alignment to/from the transformer `dim` is done with explicit 1x1 conv projections inside each module (`proj_out` in encoder, `proj_in` in decoder): the encoder/decoder run natively at the deepest feature width (`block_out_channels[-1]`) with plain Hunyuan residual shortcuts at the bottleneck, then project to/from `dim`. (Earlier `channel_resample` generalized shortcut approach was replaced by this on user request.) Mid-block-only single-head full spatial attention (Hunyuan style), so config `attention_resolutions`/`attn_heads` are now unused (left in place to avoid churn). Gradient-checkpointing and tiling code intentionally omitted. Verified: shapes for cr=8/16/32 (16/8/4 token grids), forward+backward with finite grads, `ruff format`/`ruff check` pass.
+
+---
+
+## JAX-CFD Forced Hyper Chain Loader
+
+### Objective
+Add a BCAT data config and multiscale training script for `/data/shared/jax_cfd/forced_hyper_chain`, with a loader that samples 50-frame windows from the 600-frame trajectory directories and exposes `128x128` vorticity fields.
+
+### Task List
+- [x] Inspect existing dataset adapter patterns and the NetCDF trajectory layout.
+- [x] Register a `jax_cfd` iterable dataset class with train/val/test splitting, random window starts, raw-time support, and optional symbolic inputs.
+- [x] Add `configs/data/jax_cfd.yaml` with `t_num=50`, `x_num=128`, raw grid metadata, and `start_max=-10`.
+- [x] Add a multiscale training/eval shell script analogous to `scripts/multiscale_test.sh`.
+- [x] Run focused loader/config checks and lints.
+
+### Current Focus
+Done.
+
+### Notes & Blockers
+The source dataset has 500 trajectory directories (`trajectory_000001` through `trajectory_000500`), each with 600 one-frame NetCDF/HDF5 files named `data_id000_*.nc`. Each file stores `w: (512, 512)` plus `x`, `y`, and attributes including save cadence `dt`. Loader smoke tests passed for train/raw-time and val paths, yielding finite `(50, 128, 128, 1)` tensors. Hydra composition passed for `data=jax_cfd model=multiscale_bcat`; `bash -n scripts/multiscale_jax_cfd.sh`, `ruff format`, and `ruff check` passed. `scripts/multiscale_jax_cfd.sh` was reformatted to mirror `scripts/multiscale_test.sh`. The former `tree_fno` symbolic helper was renamed to `tree_vorticity_ns`; both `fno` and `jax_cfd` dispatch to it. IDE diagnostics still report unresolved third-party imports for existing imports in `src/data_utils/all_datasets.py` and `src/symbol_utils/generators.py`.
+
+### Consolidation Follow-Up
+- [x] Add a converter that writes one `128x128` HDF5 trajectory file per raw JAX-CFD trajectory.
+- [x] Teach `JaxCFD2D` to prefer consolidated files when available and fall back to raw NetCDF directories otherwise.
+- [x] Update `configs/data/jax_cfd.yaml` with the consolidated output location.
+- [x] Validate on one trajectory before recommending the full conversion.
+
+Added `src/data_utils/convert_jax_cfd.py`, writing `trajectory_*.h5` files with `w: (600, 128, 128)`, `t`, `x`, and `y` under `trajectories_128` by default. `JaxCFD2D` prefers consolidated files only when the consolidated set is complete relative to the raw trajectory set, so partial conversions do not silently change training coverage. A one-trajectory test conversion to `/tmp/jax_cfd_consolidation_test` passed; the consolidated loader path yielded `(50, 128, 128, 1)` in about `0.016 s` versus about `0.111 s` for the raw fallback. Hydra composition and `ruff` checks passed.
+
+---
+
+## Intermediate Validation Plot Horizons
+
+### Objective
+Change intermediate validation plots to show short-horizon predictions, such as 1-step and 10-step outputs, while preserving full-horizon plotting for eval-only runs and final epochs.
+
+### Task List
+- [x] Add a config option for intermediate plot horizons.
+- [x] Update the generic 2D plotting helper to accept explicit prediction steps.
+- [x] Wire the evaluator to use the configured steps for intermediate epochs.
+- [x] Run focused selection and lint checks.
+
+### Current Focus
+Done.
+
+### Notes & Blockers
+Current intermediate plotting uses `eval_plot_steps: [1, 10]` by default, interpreted as 1-indexed prediction horizons after the input window. Eval-only and final-epoch plots still show the full available rollout. Focused plotting selection, `ruff`, and IDE diagnostics passed.

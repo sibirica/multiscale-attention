@@ -191,7 +191,9 @@ class RandomFunctions:
         elif tree_type == "incom_ns_arena_u":
             return self.tree_incom_ns_arena_u(coeffs)
         elif tree_type == "fno":
-            return self.tree_fno(coeffs)
+            return self.tree_vorticity_ns(coeffs)
+        elif tree_type == "jax_cfd":
+            return self.tree_vorticity_ns(coeffs)
         elif tree_type == "cfdbench":
             return self.tree_cfdbench(coeffs)
         else:
@@ -334,7 +336,7 @@ class RandomFunctions:
     def tree_incom_ns_arena_u(self, coeffs=None):
         return self.tree_incom_ns_arena(coeffs={"F": "0.5"})
 
-    def tree_fno(self, coeffs=None):
+    def tree_vorticity_ns(self, coeffs=None):
         # eta, viscosity
         if coeffs is not None and "eta" in coeffs:
             eta = Node(str(coeffs["eta"]))

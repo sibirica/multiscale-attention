@@ -37,7 +37,7 @@ embedder:
 
     # patch_num (per-dimension token grid) is derived from compression_ratio for
     # every embedder type. For 128x128 frames, ratios 8/16/32 give 16x16, 8x8, 4x4.
-    compression_ratio: 8 # 16
+    compression_ratio: 16 # 8
 
     # conv / linear / overlap_linear embedders (ignored when type=vae)
     conv_dim: 32

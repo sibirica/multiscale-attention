@@ -73,6 +73,7 @@ print_outputs: 0 # Print/graph all outputs
 save_outputs: 0 # save all outputs
 log_eval_plots: 4 # Log evaluation plots for each epoch, each type (-1 to disable)
 eval_plot_temporal_stride: 5 # Temporal stride for eval plots (e.g. 5 plots 0,5,10,...)
+eval_plot_steps: [1, 10] # 1-indexed prediction horizons for intermediate epoch plots
 
 validation_metrics: _l2_error # Metrics for early stopping/model selection
 
